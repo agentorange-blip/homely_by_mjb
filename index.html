@@ -524,21 +524,34 @@ function initSupabaseAuth(){
   });
 }
 
-function todayKey(d=new Date()){return d.toISOString().slice(0,10)}
+function localDateKey(d=new Date()){
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function todayKey(d=new Date()){return localDateKey(d)}
 function dateFromKey(k){return new Date(k+'T12:00:00')}
+function dayDiff(a,b){return Math.floor((dateFromKey(a)-dateFromKey(b))/86400000)}
 function escapeHtml(s=''){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function langText(chore){const l=state.settings.language; if(l==='fil') return chore.fil||chore.name; if(l==='both') return `${chore.name} • ${chore.fil||''}`; return chore.name}
 function roomName(id){const r=state.rooms.find(x=>x.id===id); if(!r)return id; return state.settings.language==='fil'?r.fil:r.name}
 function roomIcon(id){return state.rooms.find(x=>x.id===id)?.icon||'🏠'}
 function isDue(chore,date=new Date()){
   if(!chore.active)return false;
+  const key=localDateKey(date);
   const day=date.getDay(), dateNum=date.getDate();
+  const startKey=chore.startDate||null;
+  if(startKey && key<startKey)return false;
   if(chore.repeat==='daily')return true;
-  if(chore.repeat==='weekly')return (chore.days||[day]).includes(day);
-  if(chore.repeat==='monthly')return dateNum===(chore.monthDay||1);
+  if(chore.repeat==='weekly'){
+    const days=Array.isArray(chore.days)?chore.days:[];
+    return days.length ? days.includes(day) : day===dateFromKey(startKey||key).getDay();
+  }
+  if(chore.repeat==='monthly')return dateNum===Math.min(31,Math.max(1,Number(chore.monthDay)||1));
   if(chore.repeat==='custom'){
-    if(chore.intervalDays){const created=dateFromKey(chore.startDate||todayKey()); return Math.floor((date-created)/86400000)%chore.intervalDays===0}
-    return true;
+    const interval=Math.max(1,Number(chore.intervalDays)||1);
+    const start=startKey||key;
+    const diff=dayDiff(key,start);
+    return diff>=0 && diff%interval===0;
   }
   return false;
 }
@@ -604,15 +617,17 @@ function populateRoomSelects(){
 }
 function updateRepeatFields(c=null){
   const repeat=document.querySelector('input[name="repeat"]:checked')?.value||'daily';
-  let html='';
+  const start=c?.startDate||todayKey();
+  let html=`<label>Start date / Petsa ng simula</label><input id="startDate" type="date" value="${start}"><div class="mini-note">The routine begins on this date.</div>`;
   if(repeat==='weekly'){
     const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     const fil=['Linggo','Lunes','Martes','Miyerkules','Huwebes','Biyernes','Sabado'];
-    html='<label>Days / Mga araw</label><div class="radio-row">'+days.map((d,i)=>`<label><input type="checkbox" class="dayCheck" value="${i}" ${(c?.days||[]).includes(i)?'checked':''}> ${state.settings.language==='fil'?fil[i]:d}</label>`).join('')+'</div>';
+    const selected=(c?.days?.length?c.days:[dateFromKey(start).getDay()]);
+    html+=`<div style="margin-top:10px"><label>Days / Mga araw</label><div class="radio-row">${days.map((d,i)=>`<label><input type="checkbox" class="dayCheck" value="${i}" ${selected.includes(i)?'checked':''}> ${state.settings.language==='fil'?fil[i]:d}</label>`).join('')}</div></div>`;
   } else if(repeat==='monthly'){
-    html='<label>Day of month / Araw ng buwan</label><input id="monthDay" type="number" min="1" max="31" value="'+(c?.monthDay||1)+'"><div class="mini-note">For example: 1 = every 1st day of the month.</div>';
+    html+=`<div style="margin-top:10px"><label>Day of month / Araw ng buwan</label><input id="monthDay" type="number" min="1" max="31" value="${c?.monthDay||1}"><div class="mini-note">Example: 1 = every 1st day of the month.</div></div>`;
   } else if(repeat==='custom'){
-    html='<label>Every how many days?</label><input id="intervalDays" type="number" min="1" value="'+(c?.intervalDays||3)+'"><div class="mini-note">Starts today unless you choose another start date.</div>';
+    html+=`<div style="margin-top:10px"><label>Every how many days?</label><input id="intervalDays" type="number" min="1" value="${c?.intervalDays||3}"><div class="mini-note">Example: 14 = every two weeks.</div></div>`;
   }
   document.getElementById('repeatFields').innerHTML=html;
 }
@@ -631,9 +646,10 @@ function saveChore(e){
     notes:document.getElementById('notes').value.trim(),
     active:true
   };
+  obj.startDate=document.getElementById('startDate')?.value||todayKey();
   if(repeat==='weekly')obj.days=[...document.querySelectorAll('.dayCheck:checked')].map(x=>+x.value);
-  if(repeat==='monthly')obj.monthDay=+document.getElementById('monthDay').value||1;
-  if(repeat==='custom'){obj.intervalDays=+document.getElementById('intervalDays').value||3;obj.startDate=todayKey()}
+  if(repeat==='monthly')obj.monthDay=Math.min(31,Math.max(1,+document.getElementById('monthDay').value||1));
+  if(repeat==='custom')obj.intervalDays=Math.max(1,+document.getElementById('intervalDays').value||3);
   if(id){const old=state.chores.find(c=>c.id===id);Object.assign(old,obj)}
   else state.chores.push({...obj,id:crypto.randomUUID(),createdAt:Date.now(),completedDates:[]});
   save();closeModal();renderAll();toast('✓ Chore saved');
@@ -651,13 +667,24 @@ function renderToday(){
   document.getElementById('progressText').textContent=`${done} of ${total} completed`;
   document.getElementById('progressBar').style.width=pct+'%';
 }
+function repeatLabel(c){
+  if(c.repeat==='daily')return 'Daily';
+  if(c.repeat==='weekly'){
+    const names=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const days=(c.days||[]).map(i=>names[i]).join(', ');
+    return days?`Weekly · ${days}`:'Weekly';
+  }
+  if(c.repeat==='monthly')return `Monthly · ${c.monthDay||1}${['th','st','nd','rd'][((c.monthDay||1)%100-20)%10]||'th'}`;
+  if(c.repeat==='custom')return `Every ${c.intervalDays||1} days`;
+  return c.repeat||'';
+}
 function choreCard(c){
   const done=isDone(c), p=c.priority||'normal';
   return `<div class="chore ${done?'done':''}">
     <button class="check ${done?'done':''}" aria-label="Complete" onclick="toggleDone('${c.id}')">${done?'✓':''}</button>
     <div class="chore-main">
       <div class="chore-title">${escapeHtml(langText(c))}</div>
-      <div class="meta"><span>${roomIcon(c.room)} ${escapeHtml(roomName(c.room))}</span><span>⏱ ${escapeHtml(c.duration)}</span><span>🔁 ${escapeHtml(c.repeat)}</span><span class="badge ${p==='high'?'priority-high':p==='low'?'priority-low':''}">${p}</span></div>
+      <div class="meta"><span>${roomIcon(c.room)} ${escapeHtml(roomName(c.room))}</span><span>⏱ ${escapeHtml(c.duration)}</span><span>🔁 ${escapeHtml(repeatLabel(c))}</span><span class="badge ${p==='high'?'priority-high':p==='low'?'priority-low':''}">${p}</span></div>
       ${c.notes?`<div class="mini-note">${escapeHtml(c.notes)}</div>`:''}
     </div>
     <div class="chore-actions"><button class="icon-btn" title="Edit" onclick="openChoreModal('${c.id}')">✎</button><button class="icon-btn" title="Delete" onclick="deleteChore('${c.id}')">🗑</button></div>
@@ -710,7 +737,7 @@ function renderProgress(){
 function renderAll(){
   renderToday();renderChores();renderRooms();renderCalendar();renderProgress();
   const now=new Date(), h=now.getHours();
-  document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+  document.getElementById('greetingText').textContent=h<12?'Good morning,':h<18?'Good afternoon,':'Good evening,';
   document.getElementById('greetingName').textContent=getDisplayName();
   document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
   const dn=document.getElementById('displayName'); if(dn) dn.value=getDisplayName();
