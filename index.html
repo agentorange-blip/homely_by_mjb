@@ -273,6 +273,8 @@ textarea{min-height:100px;resize:vertical}
           <div id="cloudLoggedIn" style="display:none">
             <div class="mini-note">Signed in as <span class="user-email" id="cloudEmail"></span></div>
             <div class="cloud-actions"><button class="btn btn-secondary" onclick="syncCloudNow()">Sync Now</button><button class="btn btn-danger" onclick="signOutHomely()">Sign Out</button></div>
+            <div style="margin-top:10px"><button class="btn btn-secondary" onclick="resetTodayCompletions()">Reset today's completion status</button></div>
+            <div class="cloud-note">Use this once if old local test data made today's chores appear completed. It keeps the chores and removes only today's completion marks.</div>
           </div>
         </div>
         <div class="card" style="margin-top:18px"><h3>About Homely</h3><p class="sub">A household routine and home planner designed to make everyday home life easier.</p><div class="logo-wrap" id="logoArea"></div><p style="text-align:center;font-weight:800">Developed by MJB</p></div>
@@ -529,8 +531,22 @@ function isDue(chore,date=new Date()){
   return false;
 }
 function isDone(chore,key=todayKey()){return (chore.completedDates||[]).includes(key)}
+async function resetTodayCompletions(){
+  if(!confirm("Reset today's completion status? This keeps all chores but removes today's completed marks."))return;
+  const key=todayKey();
+  state.chores.forEach(c=>{c.completedDates=(c.completedDates||[]).filter(d=>d!==key)});
+  state.history=(state.history||[]).filter(h=>h.date!==key);
+  localStorage.setItem('homelyState',JSON.stringify(state));
+  renderAll();
+  if(currentUser&&currentHouseholdId){
+    const {error}=await supabaseClient.from('chore_completions').delete().eq('household_id',currentHouseholdId).eq('user_id',currentUser.id).eq('date_key',key);
+    if(error){console.error('Homely reset completion error:',error);toast('Local status reset, but cloud cleanup failed: '+error.message);return;}
+  }
+  toast('✓ Today’s completion status was reset');
+}
 function toggleDone(id){
   const c=state.chores.find(x=>x.id===id); if(!c)return;
+  if(!isDue(c)){toast('This chore is not due today.');return;}
   const key=todayKey(), idx=(c.completedDates||[]).indexOf(key);
   if(idx>=0)c.completedDates.splice(idx,1);
   else {c.completedDates.push(key);state.history.unshift({id:crypto.randomUUID(),choreId:id,date:key,action:'completed'});notify('✓ '+langText(c));}
