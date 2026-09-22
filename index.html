@@ -63,7 +63,7 @@ button{cursor:pointer}
 main{min-width:0}
 .today-date{display:block !important;visibility:visible !important;opacity:1 !important;font-size:14px;color:var(--muted);font-weight:700;white-space:nowrap;min-width:180px;padding-right:18px}.topbar{position:sticky;top:0;z-index:8;background:rgba(250,247,240,.93);backdrop-filter:blur(14px);padding:16px 32px;border-bottom:1px solid rgba(227,232,230,.75);display:flex;justify-content:space-between;align-items:center}
 .mobile-menu{display:none}
-.lang-select{border:1px solid var(--line);background:white;border-radius:12px;padding:9px 12px}
+.lang-select{border:1px solid var(--line);background:white;border-radius:12px;padding:9px 12px;width:auto;min-width:180px;flex:0 0 auto}
 .content{max-width:1300px;margin:auto;padding:30px 32px 60px}
 .view{display:none;animation:fade .25s ease}.view.active{display:block}
 @keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
@@ -141,7 +141,7 @@ textarea{min-height:100px;resize:vertical}
 @media(max-width:720px){
   body{font-size:17px}
   .topbar{min-height:68px}
-  .topbar .today-date{font-size:13px;min-width:145px;max-width:52%;text-align:left}
+  .topbar .today-date{font-size:13px;min-width:145px;max-width:52%;text-align:left;flex:0 0 auto}
   .content{padding:20px 14px 50px}
   h2{font-size:31px}
   .card{padding:18px}
