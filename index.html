@@ -153,6 +153,16 @@ textarea{min-height:100px;resize:vertical}
   .btn{min-height:52px}
 }
 
+
+/* HOMELY V8 */
+.calendar-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.calendar-toolbar .btn{min-height:44px;padding:9px 14px}
+.calendar-month{font-weight:900;font-size:22px}.calendar .day{min-height:118px;cursor:pointer}.calendar .day:hover{box-shadow:0 5px 18px rgba(36,92,90,.08)}.day .due-dot{display:block;margin-top:5px;padding:3px 6px;border-radius:8px;background:#EEF5F2;color:var(--teal);font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.room-card{cursor:pointer}.room-card:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(36,92,90,.12)}
+.tools-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.tool-item{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}.tool-item:last-child{border-bottom:0}.tool-item input[type=checkbox]{width:20px;min-height:20px}.tool-item.done span{text-decoration:line-through;color:var(--muted)}
+.reminder-list{display:grid;gap:10px}.reminder-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff}.reminder-item strong{color:var(--teal)}
+.member-pill{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}.member-pill small{color:var(--muted)}
+@media(max-width:850px){.cards-4{grid-template-columns:repeat(2,minmax(0,1fr))}.tools-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.cards-4{grid-template-columns:1fr}.calendar .day{min-height:82px;padding:7px}.calendar .day .due-dot{display:none}.calendar-toolbar{align-items:flex-start}.content{padding:20px 14px 50px}}
 </style>
 </head>
 <body>
@@ -168,6 +178,7 @@ textarea{min-height:100px;resize:vertical}
       <button data-view="calendar"><b class="nav-icon">📅</b><span class="nav-copy"><strong data-i18n="calendar">Calendar</strong><small data-i18n-desc="calendarDesc">Plan your schedule</small></span></button>
       <button data-view="rooms"><b class="nav-icon">🏠</b><span class="nav-copy"><strong data-i18n="rooms">Rooms</strong><small data-i18n-desc="roomsDesc">Organize by area</small></span></button>
       <button data-view="progress"><b class="nav-icon">📊</b><span class="nav-copy"><strong data-i18n="progress">Progress</strong><small data-i18n-desc="progressDesc">Your cleaning history</small></span></button>
+      <button data-view="tools"><b class="nav-icon">🧰</b><span class="nav-copy"><strong>Home Tools</strong><small>Supplies & maintenance</small></span></button>
       <button data-view="settings"><b class="nav-icon">⚙️</b><span class="nav-copy"><strong data-i18n="settings">Settings</strong><small data-i18n-desc="settingsDesc">Accessibility & preferences</small></span></button>
     </nav>
     <div class="sidebar-bottom">
@@ -229,13 +240,18 @@ textarea{min-height:100px;resize:vertical}
       <!-- CALENDAR -->
       <section class="view" id="view-calendar">
         <div class="hero"><div><h2 data-i18n="calendar">Calendar</h2><p class="sub" data-i18n="calendarSub">See your routines across the month.</p></div></div>
-        <div class="card"><div class="calendar" id="calendarGrid"></div></div>
+        <div class="card">
+          <div class="calendar-toolbar"><button class="btn btn-secondary" onclick="changeCalendarMonth(-1)">←</button><div class="calendar-month" id="calendarMonthLabel"></div><div><button class="btn btn-secondary" onclick="goCalendarToday()">Today</button> <button class="btn btn-secondary" onclick="changeCalendarMonth(1)">→</button></div></div>
+          <div class="calendar" id="calendarGrid"></div>
+        </div>
+        <div class="card" style="margin-top:18px"><h3 id="calendarSelectedTitle">Today's schedule</h3><div id="calendarSelectedList" class="reminder-list"></div></div>
       </section>
 
       <!-- ROOMS -->
       <section class="view" id="view-rooms">
         <div class="hero"><div><h2 data-i18n="rooms">Rooms</h2><p class="sub">Organize chores by area.</p></div><button class="btn btn-primary" onclick="addRoom()">＋ Add Room</button></div>
         <div class="grid cards-3" id="roomsGrid"></div>
+        <div class="card" style="margin-top:18px"><h3 id="roomDetailTitle">Select a room</h3><div id="roomDetailList" class="chore-list"></div></div>
       </section>
 
       <!-- PROGRESS -->
@@ -249,6 +265,15 @@ textarea{min-height:100px;resize:vertical}
         <div class="card" style="margin-top:18px"><h3>Recent activity</h3><div id="historyList"></div></div>
       </section>
 
+      <!-- HOME TOOLS -->
+      <section class="view" id="view-tools">
+        <div class="hero"><div><h2>Home Tools</h2><p class="sub">Keep supplies and maintenance in one place.</p></div></div>
+        <div class="tools-grid">
+          <div class="card"><div class="section-head" style="margin-top:0"><h3>🛒 Shopping / Supplies</h3><button class="btn btn-secondary" onclick="addShoppingItem()">＋ Add</button></div><div id="shoppingList"></div></div>
+          <div class="card"><div class="section-head" style="margin-top:0"><h3>🔧 Home Maintenance</h3><button class="btn btn-secondary" onclick="addMaintenanceItem()">＋ Add</button></div><div id="maintenanceList"></div></div>
+        </div>
+      </section>
+
       <!-- SETTINGS -->
       <section class="view" id="view-settings">
         <div class="hero"><div><h2 data-i18n="settings">Settings</h2><p class="sub">Make Homely comfortable for everyone.</p></div></div>
@@ -257,11 +282,12 @@ textarea{min-height:100px;resize:vertical}
           <div class="settings-row"><div><strong>High Contrast</strong><div class="mini-note">Stronger text and control contrast.</div></div><label class="switch"><input type="checkbox" id="highContrast" onchange="toggleSetting('highContrast',this.checked)"><span class="slider"></span></label></div>
           <div class="settings-row"><div><strong>Simple Mode</strong><div class="mini-note">Fewer menus and a calmer interface.</div></div><label class="switch"><input type="checkbox" id="simpleMode" onchange="toggleSetting('simpleMode',this.checked)"><span class="slider"></span></label></div>
           <div class="settings-row"><div><strong>Reduced Motion</strong><div class="mini-note">Minimize animations and transitions.</div></div><label class="switch"><input type="checkbox" id="reduceMotion" onchange="toggleSetting('reduceMotion',this.checked)"><span class="slider"></span></label></div>
-          <div class="settings-row"><div><strong>Browser Notifications</strong><div class="mini-note">Allow reminder notifications when this browser supports them.</div></div><button class="btn btn-secondary" onclick="requestNotifications()">Enable</button></div>
-          <div class="settings-row"><div><strong>Quiet Hours</strong><div class="mini-note">9:00 PM – 7:00 AM</div></div><span class="badge">Recommended</span></div>
+          <div class="settings-row"><div><strong>Browser Notifications</strong><div class="mini-note" id="notificationStatus">Allow Homely to show chore reminders.</div></div><button class="btn btn-secondary" onclick="requestNotifications()">Enable</button></div>
+          <div class="settings-row"><div><strong>Quiet Hours</strong><div class="mini-note">Do not send reminders during these hours.</div></div><div style="display:flex;gap:8px"><input id="quietStart" type="time" value="21:00" style="width:130px" onchange="saveQuietHours()"><input id="quietEnd" type="time" value="07:00" style="width:130px" onchange="saveQuietHours()"></div></div>
           <div class="settings-row"><div><strong>Your Name</strong><div class="mini-note">This is the name Homely uses in your greeting.</div></div><input id="displayName" style="max-width:260px" placeholder="Your name" maxlength="60" onchange="saveDisplayName(this.value)"></div>
           <div class="settings-row"><div><strong>Language</strong><div class="mini-note">English, Filipino, or both.</div></div><select style="width:auto" onchange="setLanguage(this.value)"><option value="en">English</option><option value="fil">Filipino</option><option value="both">English + Filipino</option></select></div>
         </div>
+        <div class="card" style="margin-top:18px"><h3>Household</h3><p class="sub">People who share this Homely home.</p><div id="membersList" class="reminder-list" style="margin-top:12px"></div><div class="mini-note" style="margin-top:10px">Family invitations and chore assignment can be added once additional household accounts are connected.</div></div>
         <div class="card cloud-box">
           <div class="cloud-status"><span class="status-dot" id="cloudDot"></span><div><strong>Cloud Sync</strong><div class="mini-note" id="cloudStatus">Local only — sign in to sync across devices.</div></div></div>
           <div id="cloudLoggedOut">
@@ -303,7 +329,9 @@ textarea{min-height:100px;resize:vertical}
         </div>
         <div class="field full" id="repeatFields"></div>
         <div class="field"><label>Reminder</label><input type="time" id="reminder" value="09:00"></div>
+        <div class="field"><label>Reminder enabled</label><label class="switch" style="margin-top:8px"><input type="checkbox" id="reminderEnabled" checked><span class="slider"></span></label></div>
         <div class="field"><label>Priority</label><select id="priority"><option value="low">Low</option><option value="normal" selected>Normal</option><option value="high">High</option></select></div>
+        <div class="field"><label>Assign to</label><select id="assignedTo"><option value="">Me</option></select></div>
         <div class="field full"><label>Notes / Instructions</label><textarea id="notes" placeholder="Optional instructions..."></textarea></div>
       </div>
       <div class="form-actions"><button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary">Save Chore</button></div>
@@ -833,6 +861,259 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 }
 renderAll();populateRoomSelects();initSupabaseAuth();
+
+/* =========================
+   HOMELY V8 CORE UPGRADE
+   ========================= */
+state.settings=state.settings||{};
+state.settings.quietStart=state.settings.quietStart||'21:00';
+state.settings.quietEnd=state.settings.quietEnd||'07:00';
+state.settings.displayName=state.settings.displayName||'';
+state.shopping=Array.isArray(state.shopping)?state.shopping:[];
+state.maintenance=Array.isArray(state.maintenance)?state.maintenance:[];
+state.chores=(state.chores||[]).map(c=>({...c,reminderEnabled:c.reminderEnabled!==false,assignedTo:c.assignedTo||''}));
+let calendarCursor=new Date();
+let selectedCalendarKey=todayKey();
+let selectedRoomId='';
+let reminderTimer=null;
+
+function saveLocalOnly(){localStorage.setItem('homelyState',JSON.stringify(state));}
+function inQuietHours(time, start=state.settings.quietStart||'21:00', end=state.settings.quietEnd||'07:00'){
+  const t=(time||'00:00').slice(0,5), s=(start||'21:00').slice(0,5), e=(end||'07:00').slice(0,5);
+  if(s===e)return true;
+  return s>e ? (t>=s || t<e) : (t>=s && t<e);
+}
+function currentTimeHHMM(){const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+function formatDateKey(key){return dateFromKey(key).toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'});}
+function displayNameForUserId(id){
+  if(!id)return 'Me';
+  if(id===currentUser?.id)return getDisplayName();
+  const m=(window.homelyMembers||[]).find(x=>x.user_id===id);
+  return m?.display_name||m?.email||'Household member';
+}
+
+// Final chore form handling: recurrence + reminders + assignment.
+function populateAssignedTo(selected=''){
+  const el=document.getElementById('assignedTo'); if(!el)return;
+  const members=window.homelyMembers||[];
+  el.innerHTML='<option value="">Me</option>'+members.filter(m=>m.user_id!==currentUser?.id).map(m=>`<option value="${m.user_id}" ${m.user_id===selected?'selected':''}>${escapeHtml(m.display_name||m.email||'Household member')}</option>`).join('');
+  el.value=selected||'';
+}
+function openChoreModal(id=null){
+  document.getElementById('modalBackdrop').classList.add('show');
+  document.getElementById('editId').value=id||'';
+  document.getElementById('modalTitle').textContent=id?'Edit Chore':'Add Chore';
+  populateRoomSelects();
+  if(id){
+    const c=state.chores.find(x=>x.id===id); if(!c)return;
+    document.getElementById('choreName').value=c.name||'';
+    document.getElementById('choreRoom').value=c.room||'';
+    document.getElementById('duration').value=c.duration||'15 min';
+    const radio=document.querySelector(`input[name="repeat"][value="${c.repeat||'daily'}"]`); if(radio)radio.checked=true;
+    document.getElementById('reminder').value=c.reminder||'09:00';
+    const re=document.getElementById('reminderEnabled');if(re)re.checked=c.reminderEnabled!==false;
+    document.getElementById('priority').value=c.priority||'normal';
+    document.getElementById('notes').value=c.notes||'';
+    updateRepeatFields(c); setTimeout(()=>populateAssignedTo(c.assignedTo||''),0);
+  }else{
+    document.getElementById('choreForm').reset();
+    document.querySelector('input[name="repeat"][value="daily"]').checked=true;
+    updateRepeatFields(); setTimeout(()=>populateAssignedTo(''),0);
+    const re=document.getElementById('reminderEnabled');if(re)re.checked=true;
+  }
+}
+function saveChore(e){
+  e.preventDefault();
+  const id=document.getElementById('editId').value;
+  const repeat=document.querySelector('input[name="repeat"]:checked')?.value||'daily';
+  const old=id?state.chores.find(c=>c.id===id):null;
+  const obj={
+    name:document.getElementById('choreName').value.trim(),
+    fil:old?.fil||document.getElementById('choreName').value.trim(),
+    room:document.getElementById('choreRoom').value,
+    duration:document.getElementById('duration').value,
+    repeat,
+    reminder:document.getElementById('reminder').value||'',
+    reminderEnabled:document.getElementById('reminderEnabled')?.checked!==false,
+    priority:document.getElementById('priority').value,
+    notes:document.getElementById('notes').value.trim(),
+    assignedTo:document.getElementById('assignedTo')?.value||'',
+    active:old?.active!==false,
+    startDate:document.getElementById('startDate')?.value||todayKey()
+  };
+  if(repeat==='weekly')obj.days=[...document.querySelectorAll('.dayCheck:checked')].map(x=>+x.value);
+  if(repeat==='monthly')obj.monthDay=Math.min(31,Math.max(1,+document.getElementById('monthDay')?.value||1));
+  if(repeat==='custom')obj.intervalDays=Math.max(1,+document.getElementById('intervalDays')?.value||3);
+  if(id){Object.assign(old,obj)}else state.chores.push({...obj,id:crypto.randomUUID(),createdAt:Date.now(),completedDates:[]});
+  save();closeModal();renderAll();toast('✓ Chore saved');
+}
+function choreCard(c){
+  const done=isDone(c), p=c.priority||'normal';
+  const reminder=(c.reminderEnabled!==false&&c.reminder)?`⏰ ${escapeHtml(formatTime(c.reminder))}`:'';
+  const assigned=c.assignedTo?`👤 ${escapeHtml(displayNameForUserId(c.assignedTo))}`:'';
+  return `<div class="chore ${done?'done':''}">
+    <button class="check ${done?'done':''}" aria-label="Complete" onclick="toggleDone('${c.id}')">${done?'✓':''}</button>
+    <div class="chore-main"><div class="chore-title">${escapeHtml(langText(c))}</div>
+    <div class="meta"><span>${roomIcon(c.room)} ${escapeHtml(roomName(c.room))}</span><span>⏱ ${escapeHtml(c.duration)}</span><span>🔁 ${escapeHtml(repeatLabel(c))}</span>${reminder?`<span>${reminder}</span>`:''}${assigned?`<span>${assigned}</span>`:''}<span class="badge ${p==='high'?'priority-high':p==='low'?'priority-low':''}">${p}</span></div>
+    ${c.notes?`<div class="mini-note">${escapeHtml(c.notes)}</div>`:''}</div>
+    <div class="chore-actions"><button class="icon-btn" title="Edit" onclick="openChoreModal('${c.id}')">✎</button><button class="icon-btn" title="Delete" onclick="deleteChore('${c.id}')">🗑</button></div>
+  </div>`;
+}
+function formatTime(t){if(!t)return '';const [h,m]=t.split(':').map(Number);const ap=h>=12?'PM':'AM';const hh=(h%12)||12;return `${String(hh).padStart(2,'0')}:${String(m).padStart(2,'0')} ${ap}`;}
+
+// Completion: a chore is complete for one occurrence/day, not forever.
+function toggleDone(id){
+  const c=state.chores.find(x=>x.id===id);if(!c)return;
+  if(!isDue(c)){toast('This chore is not due today.');return;}
+  const key=todayKey(), dates=c.completedDates||[]; const idx=dates.indexOf(key);
+  if(idx>=0){dates.splice(idx,1);state.history=state.history.filter(h=>!(h.choreId===id&&h.date===key));}
+  else {dates.push(key);state.history.unshift({id:crypto.randomUUID(),choreId:id,date:key,action:'completed'});}
+  c.completedDates=dates;save();renderAll();
+  toast(idx>=0?'Marked incomplete':'✓ Chore completed');
+}
+
+// Calendar with month navigation and selected-day detail.
+function renderCalendar(){
+  const y=calendarCursor.getFullYear(),m=calendarCursor.getMonth(),first=new Date(y,m,1),last=new Date(y,m+1,0);
+  const names=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const label=new Date(y,m,1).toLocaleDateString(undefined,{month:'long',year:'numeric'});
+  const ml=document.getElementById('calendarMonthLabel');if(ml)ml.textContent=label;
+  let html=names.map(n=>`<div class="mini-note" style="padding:4px;font-weight:800">${n}</div>`).join('');
+  for(let i=0;i<first.getDay();i++)html+='<div></div>';
+  for(let d=1;d<=last.getDate();d++){
+    const date=new Date(y,m,d),key=todayKey(date),due=state.chores.filter(c=>isDue(c,date));
+    const cls=`day ${key===todayKey()?'today ':''}${key===selectedCalendarKey?'selected':''}`;
+    html+=`<div class="${cls}" onclick="selectCalendarDate('${key}')"><strong>${d}</strong><small>${due.length?due.length+' chore'+(due.length>1?'s':''):''}</small>${due.slice(0,3).map(c=>`<div class="due-dot">• ${escapeHtml(langText(c))}</div>`).join('')}</div>`;
+  }
+  const grid=document.getElementById('calendarGrid');if(grid)grid.innerHTML=html;renderCalendarSelected();
+}
+function selectCalendarDate(key){selectedCalendarKey=key;renderCalendar();}
+function changeCalendarMonth(delta){calendarCursor.setMonth(calendarCursor.getMonth()+delta);selectedCalendarKey=todayKey(new Date(calendarCursor.getFullYear(),calendarCursor.getMonth(),1));renderCalendar();}
+function goCalendarToday(){calendarCursor=new Date();selectedCalendarKey=todayKey();renderCalendar();}
+function renderCalendarSelected(){
+  const title=document.getElementById('calendarSelectedTitle'),list=document.getElementById('calendarSelectedList');if(!title||!list)return;
+  title.textContent=formatDateKey(selectedCalendarKey);
+  const due=state.chores.filter(c=>isDue(c,dateFromKey(selectedCalendarKey)));
+  list.innerHTML=due.length?due.map(c=>`<div class="reminder-item"><div><strong>${escapeHtml(langText(c))}</strong><div class="mini-note">${escapeHtml(roomName(c.room))} · ${escapeHtml(c.duration)}</div></div><span class="badge">${isDone(c,selectedCalendarKey)?'Completed':formatTime(c.reminder||'')}</span></div>`).join(''):'<div class="empty">No chores scheduled for this day.</div>';
+}
+
+function renderRooms(){
+  const grid=document.getElementById('roomsGrid');if(!grid)return;
+  grid.innerHTML=state.rooms.map(r=>{
+    const chores=state.chores.filter(c=>c.room===r.id), due=chores.filter(c=>isDue(c)),done=due.filter(c=>isDone(c)).length;
+    return `<div class="card room-card" onclick="selectRoom('${r.id}')"><div class="room-icon">${r.icon}</div><div style="flex:1"><strong>${escapeHtml(state.settings.language==='fil'?r.fil:r.name)}</strong><span>${chores.length} scheduled · ${done}/${due.length} today</span></div><span class="badge">${due.length?Math.round(done/due.length*100):0}%</span></div>`;
+  }).join('');
+  if(selectedRoomId)renderRoomDetail();
+}
+function selectRoom(id){selectedRoomId=id;navigate('rooms');renderRoomDetail();}
+function renderRoomDetail(){
+  const r=state.rooms.find(x=>x.id===selectedRoomId),title=document.getElementById('roomDetailTitle'),list=document.getElementById('roomDetailList');if(!title||!list)return;
+  if(!r){title.textContent='Select a room';list.innerHTML='';return;}
+  title.textContent=`${r.icon} ${state.settings.language==='fil'?r.fil:r.name}`;
+  const chores=state.chores.filter(c=>c.room===r.id);list.innerHTML=chores.length?chores.map(choreCard).join(''):'<div class="empty">No chores in this room yet.</div>';
+}
+
+function completedAll(){return state.history?.length||0;}
+function streak(){let s=0,d=new Date();while(true){const key=todayKey(d),has=state.chores.some(c=>(c.completedDates||[]).includes(key));if(!has)break;s++;d.setDate(d.getDate()-1);}return s;}
+function renderProgress(){
+  const all=completedAll();document.getElementById('allDone').textContent=all;document.getElementById('progressStreak').textContent=streak();document.getElementById('streakCount').textContent=streak();
+  const now=new Date(),start=new Date(now.getFullYear(),now.getMonth(),now.getDate()-6),week=state.history.filter(h=>dateFromKey(h.date)>=start).length;
+  document.getElementById('weekDone').textContent=week;
+  const list=document.getElementById('historyList');list.innerHTML=(state.history||[]).slice(0,30).map(h=>{const c=state.chores.find(x=>x.id===h.choreId);return `<div class="list-row"><span>✓ ${escapeHtml(c?langText(c):'Chore')}</span><span class="mini-note">${h.date}</span></div>`}).join('')||'<div class="empty">No completed chores yet.</div>';
+}
+
+// Simple home tools: cloud-backed when the optional tables exist, local fallback otherwise.
+function addShoppingItem(){const name=prompt('Supply / item:');if(!name)return;state.shopping.push({id:crypto.randomUUID(),name:name.trim(),done:false,createdAt:Date.now()});save();renderTools();toast('✓ Added to shopping list');}
+function toggleShopping(id){const x=state.shopping.find(i=>i.id===id);if(!x)return;x.done=!x.done;save();renderTools();}
+function addMaintenanceItem(){const name=prompt('Maintenance task:');if(!name)return;state.maintenance.push({id:crypto.randomUUID(),name:name.trim(),dueDate:'',done:false,createdAt:Date.now()});save();renderTools();toast('✓ Maintenance task added');}
+function toggleMaintenance(id){const x=state.maintenance.find(i=>i.id===id);if(!x)return;x.done=!x.done;save();renderTools();}
+function renderTools(){
+  const s=document.getElementById('shoppingList'),m=document.getElementById('maintenanceList');if(!s||!m)return;
+  s.innerHTML=state.shopping.length?state.shopping.map(x=>`<div class="tool-item ${x.done?'done':''}"><input type="checkbox" ${x.done?'checked':''} onchange="toggleShopping('${x.id}')"><span>${escapeHtml(x.name)}</span></div>`).join(''):'<div class="empty">No supplies yet.</div>';
+  m.innerHTML=state.maintenance.length?state.maintenance.map(x=>`<div class="tool-item ${x.done?'done':''}"><input type="checkbox" ${x.done?'checked':''} onchange="toggleMaintenance('${x.id}')"><span>${escapeHtml(x.name)}</span></div>`).join(''):'<div class="empty">No maintenance tasks yet.</div>';
+}
+function renderMembers(){const el=document.getElementById('membersList');if(!el)return;const ms=window.homelyMembers||[];el.innerHTML=ms.length?ms.map(m=>`<div class="member-pill"><div><strong>${escapeHtml(m.display_name||m.email||'Household member')}</strong><small>${escapeHtml(m.role||'member')}</small></div><span>●</span></div>`).join(''):'<div class="empty">No household members loaded.</div>';}
+
+function saveQuietHours(){state.settings.quietStart=document.getElementById('quietStart')?.value||'21:00';state.settings.quietEnd=document.getElementById('quietEnd')?.value||'07:00';save();toast('✓ Quiet hours updated');}
+async function requestNotifications(){
+  if(!('Notification' in window)){toast('Notifications are not supported in this browser.');return;}
+  const p=await Notification.requestPermission();
+  const s=document.getElementById('notificationStatus');if(s)s.textContent=p==='granted'?'Notifications are enabled.':'Notifications are not enabled.';
+  toast(p==='granted'?'✓ Notifications enabled':'Notifications not enabled');
+}
+async function showReminderNotification(c){
+  const title='Homely Reminder';const body=`${langText(c)} is due today.`;
+  try{
+    if('serviceWorker' in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,tag:`homely-${c.id}-${todayKey()}`,icon:'mjb-logo.png',badge:'mjb-logo.png',data:{url:'./'}});}
+    else if('Notification' in window&&Notification.permission==='granted')new Notification(title,{body});
+  }catch(e){if('Notification' in window&&Notification.permission==='granted')new Notification(title,{body});}
+}
+function reminderKey(c){return `homelyReminder:${todayKey()}:${c.id}`;}
+async function checkReminders(){
+  const now=new Date(),hhmm=currentTimeHHMM();if(inQuietHours(hhmm))return;
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  for(const c of state.chores.filter(x=>isDue(x,now)&&!isDone(x,todayKey())&&x.reminderEnabled!==false&&x.reminder)){
+    const target=(c.reminder||'').slice(0,5);if(target!==hhmm)continue;
+    const key=reminderKey(c);if(localStorage.getItem(key))continue;
+    localStorage.setItem(key,'1');await showReminderNotification(c);toast(`⏰ ${langText(c)} is due now`);
+  }
+}
+function startReminderEngine(){clearInterval(reminderTimer);checkReminders();reminderTimer=setInterval(checkReminders,30000);}
+
+// Cloud upgrade: keep existing tables compatible, plus optional tools/members data.
+async function pushCloudState(){
+  if(!currentHouseholdId||!currentUser)return false;
+  dedupeLocalChores();
+  const roomsPayload=state.rooms.map(r=>({id:legacyRoomIds[r.id]||r.id,household_id:currentHouseholdId,name:r.name,name_fil:r.fil||r.name,icon:r.icon||'🏠'}));
+  let res=await supabaseClient.from('rooms').upsert(roomsPayload,{onConflict:'id'});if(res.error){toast('Cloud sync failed for rooms: '+res.error.message);return false;}
+  const validRoomIds=new Set(roomsPayload.map(r=>r.id));
+  const choresPayload=state.chores.map(c=>({id:c.id,household_id:currentHouseholdId,room_id:validRoomIds.has(legacyRoomIds[c.room]||c.room)?(legacyRoomIds[c.room]||c.room):null,name:c.name,name_fil:c.fil||c.name,duration:c.duration,repeat_type:c.repeat,repeat_config:{days:c.days||[],monthDay:c.monthDay||1,intervalDays:c.intervalDays||3,startDate:c.startDate||todayKey()},reminder_time:c.reminder||null,reminder_enabled:c.reminderEnabled!==false,priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,created_by:currentUser.id,assigned_to:c.assignedTo||null}));
+  res=await supabaseClient.from('chores').upsert(choresPayload,{onConflict:'id'});
+  if(res.error){
+    // If the optional v8 columns are not migrated yet, retry using the v7 schema.
+    const fallback=choresPayload.map(c=>{const x={...c};delete x.reminder_enabled;delete x.assigned_to;return x;});
+    const r2=await supabaseClient.from('chores').upsert(fallback,{onConflict:'id'});if(r2.error){toast('Cloud sync failed for chores: '+r2.error.message);return false;}
+  }
+  const completionRows=[];state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>completionRows.push({chore_id:c.id,household_id:currentHouseholdId,user_id:currentUser.id,date_key:date,completed_at:date+'T12:00:00Z'})));
+  if(completionRows.length){res=await supabaseClient.from('chore_completions').upsert(completionRows,{onConflict:'chore_id,user_id,date_key'});if(res.error){toast('Cloud sync failed for completion history: '+res.error.message);return false;}}
+  try{await supabaseClient.from('shopping_items').upsert(state.shopping.map(x=>({id:x.id,household_id:currentHouseholdId,name:x.name,done:!!x.done,created_by:currentUser.id})),{onConflict:'id'});await supabaseClient.from('maintenance_tasks').upsert(state.maintenance.map(x=>({id:x.id,household_id:currentHouseholdId,name:x.name,due_date:x.dueDate||null,done:!!x.done,created_by:currentUser.id})),{onConflict:'id'});}catch(e){console.warn('Optional home tools sync unavailable',e)}
+  updateCloudUI(true);return true;
+}
+async function loadCloudState(){
+  if(!currentHouseholdId)return;
+  const queries=[supabaseClient.from('rooms').select('*').eq('household_id',currentHouseholdId).order('created_at'),supabaseClient.from('chores').select('*').eq('household_id',currentHouseholdId).order('created_at'),supabaseClient.from('chore_completions').select('*').eq('household_id',currentHouseholdId).order('completed_at',{ascending:false}),supabaseClient.from('household_members').select('user_id,role,created_at').eq('household_id',currentHouseholdId).order('created_at')];
+  const [rr,cc,xx,mm]=await Promise.all(queries);
+  if(rr.error||cc.error||xx.error){console.error(rr.error||cc.error||xx.error);toast('Could not load cloud data.');return;}
+  window.homelyMembers=mm.data||[];
+  if(!cc.data?.length&&state.chores?.length){await pushCloudState();return;}
+  const completionMap={};(xx.data||[]).forEach(x=>(completionMap[x.chore_id]??=[]).push(x.date_key));
+  state.rooms=(rr.data||[]).map(r=>({id:r.id,name:r.name,fil:r.name_fil||r.name,icon:r.icon||'🏠'}));
+  state.chores=(cc.data||[]).map(c=>({id:c.id,name:c.name,fil:c.name_fil||c.name,room:c.room_id,duration:c.duration||'15 min',repeat:c.repeat_type||'daily',days:c.repeat_config?.days||[],monthDay:c.repeat_config?.monthDay||1,intervalDays:c.repeat_config?.intervalDays||3,startDate:c.repeat_config?.startDate||todayKey(),reminder:c.reminder_time||'09:00',reminderEnabled:c.reminder_enabled!==false,assignedTo:c.assigned_to||'',priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,completedDates:completionMap[c.id]||[],createdAt:new Date(c.created_at).getTime()}));
+  state.history=[];state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>state.history.push({id:c.id+'-'+date,choreId:c.id,date,action:'completed'})));state.history.sort((a,b)=>b.date.localeCompare(a.date));
+  try{const [ss,mt]=await Promise.all([supabaseClient.from('shopping_items').select('*').eq('household_id',currentHouseholdId).order('created_at'),supabaseClient.from('maintenance_tasks').select('*').eq('household_id',currentHouseholdId).order('created_at')]);if(!ss.error)state.shopping=(ss.data||[]).map(x=>({id:x.id,name:x.name,done:x.done,createdAt:new Date(x.created_at).getTime()}));if(!mt.error)state.maintenance=(mt.data||[]).map(x=>({id:x.id,name:x.name,done:x.done,dueDate:x.due_date||'',createdAt:new Date(x.created_at).getTime()}));}catch(e){}
+  saveLocalOnly();renderAll();populateRoomSelects();toast('✓ Homely synced from cloud');
+}
+
+// Make the UI render all V8 areas.
+function renderAll(){
+  renderToday();renderChores();renderRooms();renderCalendar();renderProgress();renderTools();renderMembers();
+  const now=new Date(),h=now.getHours();document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';document.getElementById('greetingName').textContent=getDisplayName();
+  document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+  const dn=document.getElementById('displayName');if(dn)dn.value=getDisplayName();
+  const qs=document.getElementById('quietStart');if(qs)qs.value=state.settings.quietStart||'21:00';const qe=document.getElementById('quietEnd');if(qe)qe.value=state.settings.quietEnd||'07:00';
+  const ns=document.getElementById('notificationStatus');if(ns&&'Notification' in window)ns.textContent=Notification.permission==='granted'?'Notifications are enabled.':Notification.permission==='denied'?'Notifications are blocked in this browser.':'Allow Homely to show chore reminders.';
+  applySettings();
+}
+
+// Update cloud UI with household members and v8 status.
+const oldUpdateCloudUI=updateCloudUI;
+updateCloudUI=function(online){oldUpdateCloudUI(online);renderMembers();};
+
+// Service worker registration uses the v8 worker and starts reminders.
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').then(()=>startReminderEngine()).catch(()=>startReminderEngine()));}else{startReminderEngine();}
+startReminderEngine();
+renderAll();
+
 </script>
 </body>
 </html>
