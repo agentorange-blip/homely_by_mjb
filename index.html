@@ -737,7 +737,7 @@ function renderProgress(){
 function renderAll(){
   renderToday();renderChores();renderRooms();renderCalendar();renderProgress();
   const now=new Date(), h=now.getHours();
-  document.getElementById('greetingText').textContent=h<12?'Good morning,':h<18?'Good afternoon,':'Good evening,';
+  document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';
   document.getElementById('greetingName').textContent=getDisplayName();
   document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
   const dn=document.getElementById('displayName'); if(dn) dn.value=getDisplayName();
