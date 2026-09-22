@@ -1,0 +1,762 @@
+
+
+const SUPABASE_URL = "https://cqantiyeqbvhzegxtrfu.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_psB0s9pe-GA8QU7O1dCYKA_YY6jDy16";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+let currentUser = null;
+let currentHouseholdId = null;
+let currentDisplayName = "";
+let cloudSyncTimer = null;
+
+const ROOM_IDS={
+  bedroom:'00000000-0000-4000-8000-000000000001',
+  kitchen:'00000000-0000-4000-8000-000000000002',
+  bathroom:'00000000-0000-4000-8000-000000000003',
+  living:'00000000-0000-4000-8000-000000000004',
+  dining:'00000000-0000-4000-8000-000000000005',
+  laundry:'00000000-0000-4000-8000-000000000006',
+  balcony:'00000000-0000-4000-8000-000000000007',
+  garage:'00000000-0000-4000-8000-000000000008',
+  garden:'00000000-0000-4000-8000-000000000009'
+};
+const defaultRooms=[
+  {id:ROOM_IDS.bedroom,name:'Bedroom',fil:'Kwarto',icon:'🛏️'},
+  {id:ROOM_IDS.kitchen,name:'Kitchen',fil:'Kusina',icon:'🍳'},
+  {id:ROOM_IDS.bathroom,name:'Bathroom',fil:'Banyo',icon:'🛁'},
+  {id:ROOM_IDS.living,name:'Living Room',fil:'Sala',icon:'🛋️'},
+  {id:ROOM_IDS.dining,name:'Dining Area',fil:'Dining Area',icon:'🍽️'},
+  {id:ROOM_IDS.laundry,name:'Laundry Area',fil:'Laundry Area',icon:'🧺'},
+  {id:ROOM_IDS.balcony,name:'Balcony',fil:'Balkonahe',icon:'🌤️'},
+  {id:ROOM_IDS.garage,name:'Garage',fil:'Garage',icon:'🚙'},
+  {id:ROOM_IDS.garden,name:'Garden',fil:'Bakuran',icon:'🌿'}
+];
+const starterChores=[
+  {name:'Make the bed',fil:'Ayusin ang kama',room:'bedroom',duration:'5 min',repeat:'daily',reminder:'07:00',priority:'normal',notes:''},
+  {name:'Wash the dishes',fil:'Maghugas ng pinggan',room:'kitchen',duration:'15 min',repeat:'daily',reminder:'19:00',priority:'normal',notes:''},
+  {name:'Wipe the dining table',fil:'Punasan ang mesa',room:'dining',duration:'5 min',repeat:'daily',reminder:'19:30',priority:'low',notes:''},
+  {name:'Sweep the floor',fil:'Magwalis ng sahig',room:'living',duration:'15 min',repeat:'daily',reminder:'09:00',priority:'normal',notes:''},
+  {name:'Clean the bathroom',fil:'Maglinis ng banyo',room:'bathroom',duration:'30 min',repeat:'weekly',days:[6],reminder:'09:00',priority:'normal',notes:''},
+  {name:'Change bedsheets',fil:'Magpalit ng bedsheet',room:'bedroom',duration:'15 min',repeat:'weekly',days:[0],reminder:'10:00',priority:'normal',notes:''},
+  {name:'Mop the floors',fil:'Mag-mop ng sahig',room:'living',duration:'30 min',repeat:'weekly',days:[6],reminder:'10:00',priority:'normal',notes:''},
+  {name:'Clean the refrigerator',fil:'Maglinis ng refrigerator',room:'kitchen',duration:'45 min',repeat:'monthly',monthDay:1,reminder:'09:00',priority:'low',notes:''}
+];
+
+let state=JSON.parse(localStorage.getItem('homelyState')||'null') || {
+  rooms:defaultRooms, chores:[], history:[], settings:{language:'en',displayName:'',largeText:false,highContrast:false,simpleMode:false,reduceMotion:false}
+};
+// Migrate the original local-only room IDs (e.g. 'bedroom') to real UUIDs
+// because Supabase rooms.id is a UUID column.
+const legacyRoomIds={bedroom:ROOM_IDS.bedroom,kitchen:ROOM_IDS.kitchen,bathroom:ROOM_IDS.bathroom,living:ROOM_IDS.living,dining:ROOM_IDS.dining,laundry:ROOM_IDS.laundry,balcony:ROOM_IDS.balcony,garage:ROOM_IDS.garage,garden:ROOM_IDS.garden};
+state.settings=state.settings||{}; if(!('displayName' in state.settings)) state.settings.displayName='';
+if(!state.rooms?.length){ state.rooms=defaultRooms; }
+state.rooms=state.rooms.map(r=>({...r,id:legacyRoomIds[r.id]||r.id}));
+if(!state.chores.length){
+  state.chores=starterChores.map((x,i)=>({...x,room:legacyRoomIds[x.room]||x.room,id:crypto.randomUUID(),createdAt:Date.now()+i,active:true,completedDates:[]}));
+  save();
+}else{
+  state.chores=state.chores.map(c=>({...c,room:legacyRoomIds[c.room]||c.room}));
+}
+let currentCleaningIndex=0;
+
+function save(){localStorage.setItem('homelyState',JSON.stringify(state)); queueCloudSync()}
+async function ensureCloudSetup(){
+  if(!currentUser)return false;
+  const {data:existingProfile,error:profileError}=await supabaseClient.from('profiles').select('display_name').eq('user_id',currentUser.id).maybeSingle();
+  if(profileError){console.error(profileError);return false;}
+  if(existingProfile){
+    currentDisplayName=existingProfile.display_name || (currentUser.email||'').split('@')[0];
+  }else{
+    currentDisplayName=(currentUser.email||'').split('@')[0];
+    const {error:e}=await supabaseClient.from('profiles').insert({user_id:currentUser.id,display_name:currentDisplayName});
+    if(e){console.error(e);return false;}
+  }
+  state.settings.displayName=currentDisplayName;
+  localStorage.setItem('homelyState',JSON.stringify(state));
+  const {data:members,error:memberError}=await supabaseClient.from('household_members').select('household_id,role').eq('user_id',currentUser.id).limit(1);
+  if(memberError){console.error(memberError);return false;}
+  if(members?.length){
+    members.sort((a,b)=>new Date(a.created_at||0)-new Date(b.created_at||0));
+    currentHouseholdId=members[0].household_id;
+    return true;
+  }
+  const {data:household,error:householdError}=await supabaseClient.from('households').insert({name:'My Homely Home',owner_id:currentUser.id}).select().single();
+  if(householdError){console.error(householdError);toast('Could not create your household. Run the Supabase SQL setup first.');return false;}
+  currentHouseholdId=household.id;
+  const {error:hmError}=await supabaseClient.from('household_members').insert({household_id:currentHouseholdId,user_id:currentUser.id,role:'owner'});
+  if(hmError){console.error(hmError);return false;}
+  return true;
+}
+
+async function loadCloudState(){
+  if(!currentHouseholdId)return;
+  const [{data:rooms,error:roomsError},{data:chores,error:choresError},{data:completions,error:completionError}]=await Promise.all([
+    supabaseClient.from('rooms').select('*').eq('household_id',currentHouseholdId).order('created_at'),
+    supabaseClient.from('chores').select('*').eq('household_id',currentHouseholdId).order('created_at'),
+    supabaseClient.from('chore_completions').select('*').eq('household_id',currentHouseholdId).order('completed_at',{ascending:false})
+  ]);
+  if(roomsError||choresError||completionError){console.error(roomsError||choresError||completionError);toast('Could not load cloud data.');return;}
+  // First/partial sync: if the cloud has no chores but this device has local chores,
+  // upload the local state instead of replacing it with an empty cloud state.
+  if(!chores?.length && state.chores?.length){
+    const pushed=await pushCloudState();
+    if(pushed){ toast('✓ Homely synced to cloud'); return; }
+  }
+  if(!rooms?.length && !chores?.length){
+    const pushed=await pushCloudState();
+    if(pushed) toast('✓ Homely synced to cloud');
+    return;
+  }
+  const completionMap={};
+  (completions||[]).forEach(x=>{(completionMap[x.chore_id] ||= []).push(x.date_key)});
+  state.rooms=(rooms||[]).map(r=>({id:r.id,name:r.name,fil:r.name_fil||r.name,icon:r.icon||'🏠'}));
+  state.chores=(chores||[]).map(c=>({id:c.id,name:c.name,fil:c.name_fil||c.name,room:c.room_id,duration:c.duration||'15 min',repeat:c.repeat_type||'daily',days:c.repeat_config?.days||[],monthDay:c.repeat_config?.monthDay||1,intervalDays:c.repeat_config?.intervalDays||3,startDate:c.repeat_config?.startDate||todayKey(),reminder:c.reminder_time||'09:00',priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,completedDates:completionMap[c.id]||[],createdAt:new Date(c.created_at).getTime()}));
+  state.history=[];
+  state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>state.history.push({id:c.id+'-'+date,choreId:c.id,date,action:'completed'})));
+  state.history.sort((a,b)=>b.date.localeCompare(a.date));
+  localStorage.setItem('homelyState',JSON.stringify(state));
+  renderAll();populateRoomSelects();
+  toast('✓ Homely synced from cloud');
+}
+
+function dedupeLocalChores(){
+  const seen=new Set();
+  const unique=[];
+  for(const c of state.chores||[]){
+    const key=[c.room||'',(c.name||'').trim().toLowerCase(),c.repeat||'daily',c.duration||'',c.reminder||'',c.priority||'normal',(c.notes||'').trim().toLowerCase()].join('|');
+    if(seen.has(key)) continue;
+    seen.add(key); unique.push(c);
+  }
+  if(unique.length !== (state.chores||[]).length){
+    state.chores=unique;
+    localStorage.setItem('homelyState',JSON.stringify(state));
+  }
+}
+
+async function pushCloudState(){
+  if(!currentHouseholdId||!currentUser)return false;
+  // Repeated Sync Now calls are safe: existing rows are updated by UUID instead of inserted again.
+  // Also remove exact duplicate local test chores before pushing.
+  dedupeLocalChores();
+  // Ensure all local room IDs are valid UUIDs before sending them to Supabase.
+  const roomsPayload=state.rooms.map(r=>({id:legacyRoomIds[r.id]||r.id,household_id:currentHouseholdId,name:r.name,name_fil:r.fil||r.name,icon:r.icon||'🏠'}));
+  const {error:roomError}=await supabaseClient.from('rooms').upsert(roomsPayload,{onConflict:'id'});
+  if(roomError){console.error('Homely room sync error:',roomError);toast('Cloud sync failed for rooms: '+roomError.message);return false;}
+  const validRoomIds=new Set(roomsPayload.map(r=>r.id));
+  const choresPayload=state.chores.map(c=>({id:c.id,household_id:currentHouseholdId,room_id:validRoomIds.has(legacyRoomIds[c.room]||c.room)?(legacyRoomIds[c.room]||c.room):null,name:c.name,name_fil:c.fil||c.name,duration:c.duration,repeat_type:c.repeat,repeat_config:{days:c.days||[],monthDay:c.monthDay||1,intervalDays:c.intervalDays||3,startDate:c.startDate||todayKey()},reminder_time:c.reminder||null,priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,created_by:currentUser.id}));
+  const {error:choreError}=await supabaseClient.from('chores').upsert(choresPayload,{onConflict:'id'});
+  if(choreError){console.error('Homely chore sync error:',choreError);toast('Cloud sync failed for chores: '+choreError.message);return false;}
+  const completionRows=[];
+  state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>completionRows.push({chore_id:c.id,household_id:currentHouseholdId,user_id:currentUser.id,date_key:date,completed_at:date+'T12:00:00Z'})));
+  if(completionRows.length){const {error:e}=await supabaseClient.from('chore_completions').upsert(completionRows,{onConflict:'chore_id,user_id,date_key'});if(e){console.error('Homely completion sync error:',e);toast('Cloud sync failed for completion history: '+e.message);return false;}}
+  updateCloudUI(true);
+  return true;
+}
+function queueCloudSync(){
+  if(!currentUser||!currentHouseholdId)return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer=setTimeout(()=>pushCloudState().catch(console.error),700);
+}
+function updateCloudUI(online){
+  const dot=document.getElementById('cloudDot'), status=document.getElementById('cloudStatus');
+  if(!dot||!status)return;
+  dot.classList.toggle('online',!!currentUser);dot.classList.toggle('offline',!currentUser);
+  document.getElementById('cloudLoggedOut').style.display=currentUser?'none':'block';
+  document.getElementById('cloudLoggedIn').style.display=currentUser?'block':'none';
+  if(currentUser){document.getElementById('cloudEmail').textContent=currentUser.email||'';status.textContent=online?'Synced to Supabase':'Signed in — syncing when changes are made.';}
+  else status.textContent='Local only — sign in to sync across devices.';
+}
+async function signUpHomely(){
+  const email=document.getElementById('authEmail').value.trim(),password=document.getElementById('authPassword').value;
+  if(!email||password.length<6){toast('Enter an email and a password with at least 6 characters.');return;}
+  const {data,error}=await supabaseClient.auth.signUp({email,password});
+  if(error){toast(error.message);return;}
+  if(data.session){currentUser=data.user;await ensureCloudSetup();await loadCloudState();updateCloudUI(true);}
+  else toast('✓ Account created. Check your email to confirm, then sign in.');
+}
+async function signInHomely(){
+  const email=document.getElementById('authEmail').value.trim(),password=document.getElementById('authPassword').value;
+  if(!email||!password){toast('Enter your email and password.');return;}
+  const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
+  if(error){toast(error.message);return;}
+  currentUser=data.user;const ok=await ensureCloudSetup();if(ok){await loadCloudState();updateCloudUI(true);}
+}
+async function signOutHomely(){await supabaseClient.auth.signOut();currentUser=null;currentHouseholdId=null;currentDisplayName='';updateCloudUI(false);toast('Signed out. Your local data remains on this device.');}
+async function syncCloudNow(){
+  if(!currentUser){toast('Sign in first.');return;}
+  const pushed=await pushCloudState();
+  if(pushed){await loadCloudState();toast('✓ Sync complete');}
+}
+
+function initSupabaseAuth(){
+  supabaseClient.auth.getSession().then(async ({data})=>{
+    currentUser=data.session?.user||null;
+    if(currentUser){const ok=await ensureCloudSetup();if(ok)await loadCloudState();}
+    updateCloudUI(!!currentUser);
+  }).catch(console.error);
+  supabaseClient.auth.onAuthStateChange((_event,session)=>{
+    setTimeout(async()=>{currentUser=session?.user||null;if(currentUser){const ok=await ensureCloudSetup();if(ok)await loadCloudState();}updateCloudUI(!!currentUser);},0);
+  });
+}
+
+function localDateKey(d=new Date()){
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function todayKey(d=new Date()){return localDateKey(d)}
+function dateFromKey(k){return new Date(k+'T12:00:00')}
+function dayDiff(a,b){return Math.floor((dateFromKey(a)-dateFromKey(b))/86400000)}
+function escapeHtml(s=''){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function langText(chore){const l=state.settings.language; if(l==='fil') return chore.fil||chore.name; if(l==='both') return `${chore.name} • ${chore.fil||''}`; return chore.name}
+function roomName(id){const r=state.rooms.find(x=>x.id===id); if(!r)return id; return state.settings.language==='fil'?r.fil:r.name}
+function roomIcon(id){return state.rooms.find(x=>x.id===id)?.icon||'🏠'}
+function isDue(chore,date=new Date()){
+  if(!chore.active)return false;
+  const key=localDateKey(date);
+  const day=date.getDay(), dateNum=date.getDate();
+  const startKey=chore.startDate||null;
+  if(startKey && key<startKey)return false;
+  if(chore.repeat==='daily')return true;
+  if(chore.repeat==='weekly'){
+    const days=Array.isArray(chore.days)?chore.days:[];
+    return days.length ? days.includes(day) : day===dateFromKey(startKey||key).getDay();
+  }
+  if(chore.repeat==='monthly')return dateNum===Math.min(31,Math.max(1,Number(chore.monthDay)||1));
+  if(chore.repeat==='custom'){
+    const interval=Math.max(1,Number(chore.intervalDays)||1);
+    const start=startKey||key;
+    const diff=dayDiff(key,start);
+    return diff>=0 && diff%interval===0;
+  }
+  return false;
+}
+function isDone(chore,key=todayKey()){return (chore.completedDates||[]).includes(key)}
+async function resetTodayCompletions(){
+  if(!confirm("Reset today's completion status? This keeps all chores but removes today's completed marks."))return;
+  const key=todayKey();
+  state.chores.forEach(c=>{c.completedDates=(c.completedDates||[]).filter(d=>d!==key)});
+  state.history=(state.history||[]).filter(h=>h.date!==key);
+  localStorage.setItem('homelyState',JSON.stringify(state));
+  renderAll();
+  if(currentUser&&currentHouseholdId){
+    const {error}=await supabaseClient.from('chore_completions').delete().eq('household_id',currentHouseholdId).eq('user_id',currentUser.id).eq('date_key',key);
+    if(error){console.error('Homely reset completion error:',error);toast('Local status reset, but cloud cleanup failed: '+error.message);return;}
+  }
+  toast('✓ Today’s completion status was reset');
+}
+function toggleDone(id){
+  const c=state.chores.find(x=>x.id===id); if(!c)return;
+  if(!isDue(c)){toast('This chore is not due today.');return;}
+  const key=todayKey(), idx=(c.completedDates||[]).indexOf(key);
+  if(idx>=0)c.completedDates.splice(idx,1);
+  else {c.completedDates.push(key);state.history.unshift({id:crypto.randomUUID(),choreId:id,date:key,action:'completed'});notify('✓ '+langText(c));}
+  save();renderAll();
+}
+async function deleteChore(id){
+  if(!confirm('Delete this chore?'))return;
+  state.chores=state.chores.filter(c=>c.id!==id);
+  state.history=state.history.filter(h=>h.choreId!==id);
+  save();renderAll();
+  if(currentUser&&currentHouseholdId){
+    const {error}=await supabaseClient.from('chores').delete().eq('id',id).eq('household_id',currentHouseholdId);
+    if(error){console.error('Homely cloud delete error:',error);toast('Deleted here, but cloud delete failed.');return;}
+  }
+  toast('Chore deleted');
+}
+function openChoreModal(id=null){
+  document.getElementById('modalBackdrop').classList.add('show');
+  document.getElementById('editId').value=id||'';
+  document.getElementById('modalTitle').textContent=id?'Edit Chore':'Add Chore';
+  populateRoomSelects();
+  if(id){
+    const c=state.chores.find(x=>x.id===id);
+    document.getElementById('choreName').value=c.name;
+    document.getElementById('choreRoom').value=c.room;
+    document.getElementById('duration').value=c.duration;
+    document.querySelector(`input[name="repeat"][value="${c.repeat}"]`).checked=true;
+    document.getElementById('reminder').value=c.reminder||'09:00';
+    document.getElementById('priority').value=c.priority||'normal';
+    document.getElementById('notes').value=c.notes||'';
+    updateRepeatFields(c);
+  }else{
+    document.getElementById('choreForm').reset();
+    document.querySelector('input[name="repeat"][value="daily"]').checked=true;
+    updateRepeatFields();
+  }
+}
+function closeModal(){document.getElementById('modalBackdrop').classList.remove('show')}
+function populateRoomSelects(){
+  const options=state.rooms.map(r=>`<option value="${r.id}">${r.icon} ${escapeHtml(state.settings.language==='fil'?r.fil:r.name)}</option>`).join('');
+  document.getElementById('choreRoom').innerHTML=options;
+  const filter=document.getElementById('filterRoom'); if(filter)filter.innerHTML='<option value="">All rooms</option>'+options;
+}
+function updateRepeatFields(c=null){
+  const repeat=document.querySelector('input[name="repeat"]:checked')?.value||'daily';
+  const start=c?.startDate||todayKey();
+  let html=`<label>Start date / Petsa ng simula</label><input id="startDate" type="date" value="${start}"><div class="mini-note">The routine begins on this date.</div>`;
+  if(repeat==='weekly'){
+    const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const fil=['Linggo','Lunes','Martes','Miyerkules','Huwebes','Biyernes','Sabado'];
+    const selected=(c?.days?.length?c.days:[dateFromKey(start).getDay()]);
+    html+=`<div style="margin-top:10px"><label>Days / Mga araw</label><div class="radio-row">${days.map((d,i)=>`<label><input type="checkbox" class="dayCheck" value="${i}" ${selected.includes(i)?'checked':''}> ${state.settings.language==='fil'?fil[i]:d}</label>`).join('')}</div></div>`;
+  } else if(repeat==='monthly'){
+    html+=`<div style="margin-top:10px"><label>Day of month / Araw ng buwan</label><input id="monthDay" type="number" min="1" max="31" value="${c?.monthDay||1}"><div class="mini-note">Example: 1 = every 1st day of the month.</div></div>`;
+  } else if(repeat==='custom'){
+    html+=`<div style="margin-top:10px"><label>Every how many days?</label><input id="intervalDays" type="number" min="1" value="${c?.intervalDays||3}"><div class="mini-note">Example: 14 = every two weeks.</div></div>`;
+  }
+  document.getElementById('repeatFields').innerHTML=html;
+}
+function saveChore(e){
+  e.preventDefault();
+  const id=document.getElementById('editId').value;
+  const repeat=document.querySelector('input[name="repeat"]:checked').value;
+  const obj={
+    name:document.getElementById('choreName').value.trim(),
+    fil:document.getElementById('choreName').value.trim(),
+    room:document.getElementById('choreRoom').value,
+    duration:document.getElementById('duration').value,
+    repeat,
+    reminder:document.getElementById('reminder').value,
+    priority:document.getElementById('priority').value,
+    notes:document.getElementById('notes').value.trim(),
+    active:true
+  };
+  obj.startDate=document.getElementById('startDate')?.value||todayKey();
+  if(repeat==='weekly')obj.days=[...document.querySelectorAll('.dayCheck:checked')].map(x=>+x.value);
+  if(repeat==='monthly')obj.monthDay=Math.min(31,Math.max(1,+document.getElementById('monthDay').value||1));
+  if(repeat==='custom')obj.intervalDays=Math.max(1,+document.getElementById('intervalDays').value||3);
+  if(id){const old=state.chores.find(c=>c.id===id);Object.assign(old,obj)}
+  else state.chores.push({...obj,id:crypto.randomUUID(),createdAt:Date.now(),completedDates:[]});
+  save();closeModal();renderAll();toast('✓ Chore saved');
+}
+function renderToday(){
+  const list=state.chores.filter(c=>isDue(c)).sort((a,b)=>Number(isDone(a))-Number(isDone(b)));
+  const el=document.getElementById('todayList');
+  if(!list.length){el.innerHTML='<div class="empty">No chores scheduled for today. Enjoy the day!</div>';return}
+  el.innerHTML=list.map(choreCard).join('');
+  const done=list.filter(c=>isDone(c)).length, total=list.length, pct=total?Math.round(done/total*100):0;
+  document.getElementById('todayCount').textContent=total;
+  document.getElementById('doneCount').textContent=done;
+  document.getElementById('remainingCount').textContent=total-done;
+  document.getElementById('progressPct').textContent=pct+'%';
+  document.getElementById('progressText').textContent=`${done} of ${total} completed`;
+  document.getElementById('progressBar').style.width=pct+'%';
+}
+function repeatLabel(c){
+  if(c.repeat==='daily')return 'Daily';
+  if(c.repeat==='weekly'){
+    const names=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const days=(c.days||[]).map(i=>names[i]).join(', ');
+    return days?`Weekly · ${days}`:'Weekly';
+  }
+  if(c.repeat==='monthly')return `Monthly · ${c.monthDay||1}${['th','st','nd','rd'][((c.monthDay||1)%100-20)%10]||'th'}`;
+  if(c.repeat==='custom')return `Every ${c.intervalDays||1} days`;
+  return c.repeat||'';
+}
+function choreCard(c){
+  const done=isDone(c), p=c.priority||'normal';
+  return `<div class="chore ${done?'done':''}">
+    <button class="check ${done?'done':''}" aria-label="Complete" onclick="toggleDone('${c.id}')">${done?'✓':''}</button>
+    <div class="chore-main">
+      <div class="chore-title">${escapeHtml(langText(c))}</div>
+      <div class="meta"><span>${roomIcon(c.room)} ${escapeHtml(roomName(c.room))}</span><span>⏱ ${escapeHtml(c.duration)}</span><span>🔁 ${escapeHtml(repeatLabel(c))}</span><span class="badge ${p==='high'?'priority-high':p==='low'?'priority-low':''}">${p}</span></div>
+      ${c.notes?`<div class="mini-note">${escapeHtml(c.notes)}</div>`:''}
+    </div>
+    <div class="chore-actions"><button class="icon-btn" title="Edit" onclick="openChoreModal('${c.id}')">✎</button><button class="icon-btn" title="Delete" onclick="deleteChore('${c.id}')">🗑</button></div>
+  </div>`;
+}
+function renderChores(){
+  const q=(document.getElementById('searchChores')?.value||'').toLowerCase();
+  const room=document.getElementById('filterRoom')?.value||'';
+  const list=state.chores.filter(c=>(!room||c.room===room)&&(!q||c.name.toLowerCase().includes(q)||(c.fil||'').toLowerCase().includes(q)));
+  document.getElementById('allChoresList').innerHTML=list.length?list.map(choreCard).join(''):'<div class="empty">No chores found.</div>';
+}
+function renderRooms(){
+  document.getElementById('roomsGrid').innerHTML=state.rooms.map(r=>{
+    const count=state.chores.filter(c=>c.room===r.id).length;
+    return `<div class="card room-card"><div class="room-icon">${r.icon}</div><div><strong>${escapeHtml(state.settings.language==='fil'?r.fil:r.name)}</strong><span>${count} ${count===1?'chore':'chores'} scheduled</span></div></div>`;
+  }).join('');
+}
+function renderCalendar(){
+  const now=new Date(), y=now.getFullYear(), m=now.getMonth(), first=new Date(y,m,1), last=new Date(y,m+1,0);
+  const names=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  let html=names.map(n=>`<div class="mini-note" style="padding:4px;font-weight:800">${n}</div>`).join('');
+  for(let i=0;i<first.getDay();i++)html+='<div></div>';
+  for(let d=1;d<=last.getDate();d++){
+    const date=new Date(y,m,d), key=todayKey(date), due=state.chores.filter(c=>isDue(c,date));
+    html+=`<div class="day ${key===todayKey()?'today':''}"><strong>${d}</strong><small>${due.length?due.length+' chore'+(due.length>1?'s':''):''}</small>${due.slice(0,3).map(c=>`<div class="mini-note">• ${escapeHtml(langText(c))}</div>`).join('')}</div>`;
+  }
+  document.getElementById('calendarGrid').innerHTML=html;
+}
+function completedAll(){return state.chores.reduce((n,c)=>n+(c.completedDates?.length||0),0)}
+function streak(){
+  let s=0,d=new Date();
+  while(true){
+    const key=todayKey(d), has=state.chores.some(c=>(c.completedDates||[]).includes(key));
+    if(!has)break;s++;d.setDate(d.getDate()-1);
+  }
+  return s;
+}
+function renderProgress(){
+  document.getElementById('allDone').textContent=completedAll();
+  document.getElementById('progressStreak').textContent=streak();
+  document.getElementById('streakCount').textContent=streak();
+  const start=new Date();start.setDate(start.getDate()-6);
+  const week=state.history.filter(h=>dateFromKey(h.date)>=new Date(start.toDateString())).length;
+  document.getElementById('weekDone').textContent=week;
+  document.getElementById('historyList').innerHTML=state.history.slice(0,20).map(h=>{
+    const c=state.chores.find(x=>x.id===h.choreId);
+    return `<div class="list-row"><span>✓ ${escapeHtml(c?langText(c):'Chore')}</span><span class="mini-note">${h.date}</span></div>`;
+  }).join('')||'<div class="empty">No completed chores yet.</div>';
+}
+function renderAll(){
+  renderToday();renderChores();renderRooms();renderCalendar();renderProgress();
+  const now=new Date(), h=now.getHours();
+  document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+  document.getElementById('greetingName').textContent=getDisplayName();
+  document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+  const dn=document.getElementById('displayName'); if(dn) dn.value=getDisplayName();
+  applySettings();
+}
+function navigate(view){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('view-'+view).classList.add('active');
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+  document.getElementById('sidebar').classList.remove('open');
+}
+document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open')}
+function addRoom(){
+  const name=prompt('Room name / Pangalan ng lugar:'); if(!name)return;
+  state.rooms.push({id:crypto.randomUUID(),name,fil:name,icon:'🏠'});save();if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+renderAll();populateRoomSelects();
+}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+function notify(msg){if('Notification' in window&&Notification.permission==='granted')new Notification('Homely',{body:msg});toast(msg)}
+async function requestNotifications(){
+  if(!('Notification' in window)){toast('Notifications are not supported in this browser.');return}
+  const p=await Notification.requestPermission();toast(p==='granted'?'✓ Notifications enabled':'Notifications not enabled');
+}
+function setLanguage(l){state.settings.language=l;save();if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+renderAll();populateRoomSelects();updateRepeatFields()}
+async function saveDisplayName(value){
+  const name=(value||'').trim().slice(0,60);
+  currentDisplayName=name || ((currentUser?.email||'').split('@')[0]) || 'there';
+  state.settings.displayName=currentDisplayName;
+  localStorage.setItem('homelyState',JSON.stringify(state));
+  if(currentUser){
+    const {error}=await supabaseClient.from('profiles').upsert({user_id:currentUser.id,display_name:currentDisplayName},{onConflict:'user_id'});
+    if(error){console.error(error);toast('Name saved here, but cloud update failed.');return;}
+  }
+  renderAll();
+  toast('✓ Name updated');
+}
+function getDisplayName(){
+  return (currentDisplayName || state.settings.displayName || (currentUser?.email||'').split('@')[0] || 'there').trim() || 'there';
+}
+function toggleSetting(key,val){state.settings[key]=val;save();applySettings()}
+function applySettings(){
+  const b=document.body;
+  b.classList.toggle('large-text',state.settings.largeText);
+  b.classList.toggle('high-contrast',state.settings.highContrast);
+  b.classList.toggle('simple-mode',state.settings.simpleMode);
+  b.classList.toggle('reduce-motion',state.settings.reduceMotion);
+  document.getElementById('language').value=state.settings.language;
+  ['largeText','highContrast','simpleMode','reduceMotion'].forEach(k=>{const e=document.getElementById(k);if(e)e.checked=state.settings[k]});
+  const logo=document.getElementById('logoArea');
+  if(logo && !logo.innerHTML)logo.innerHTML='<img src="mjb-logo.png" alt="MJB developed by logo">';
+}
+const i18n={
+  en:{home:'Home',chores:'My Chores',calendar:'Calendar',rooms:'Rooms',progress:'Progress',settings:'Settings',addChore:'Add Chore',cleaningMode:'Cleaning Mode',homeSub:'Here is what needs your attention today.',today:'Today',done:'Completed',remaining:'Remaining',streak:'Active days',dailyProgress:"Today's progress",todaysChores:"Today's Chores",startCleaning:'Start Cleaning',allChores:'All Chores',manageChores:'Create routines for your home.',search:'Search',filterRoom:'Room',calendarSub:'See your routines across the month.'},
+  fil:{home:'Home',chores:'Mga Gawain',calendar:'Kalendaryo',rooms:'Mga Lugar',progress:'Progress',settings:'Settings',addChore:'Magdagdag',cleaningMode:'Cleaning Mode',homeSub:'Narito ang mga gawain para sa iyo ngayon.',today:'Ngayong Araw',done:'Tapos na',remaining:'Natitira',streak:'Mga araw na aktibo',dailyProgress:'Progress ngayon',todaysChores:'Mga Gawain Ngayon',startCleaning:'Simulan ang Paglilinis',allChores:'Lahat ng Gawain',manageChores:'Gumawa ng routine para sa bahay.',search:'Hanapin',filterRoom:'Lugar',calendarSub:'Tingnan ang mga routine ngayong buwan.'}
+};
+function applyI18n(){
+  const l=state.settings.language==='fil'?'fil':'en';
+  const desc={
+    en:{homeDesc:'Your daily overview',choresDesc:'Tasks & routines',calendarDesc:'Plan your schedule',roomsDesc:'Organize by area',progressDesc:'Your cleaning history',settingsDesc:'Accessibility & preferences'},
+    fil:{homeDesc:'Buod ng araw',choresDesc:'Mga gawain at routine',calendarDesc:'Ayusin ang schedule',roomsDesc:'Ayusin ayon sa lugar',progressDesc:'Kasaysayan ng gawain',settingsDesc:'Accessibility at settings'}
+  };
+  document.querySelectorAll('[data-i18n-desc]').forEach(e=>{e.textContent=desc[l][e.dataset.i18nDesc]||e.textContent});
+  document.querySelectorAll('[data-i18n]').forEach(e=>{e.textContent=i18n[l][e.dataset.i18n]||e.textContent});
+}
+const originalApplySettings=applySettings;
+applySettings=function(){originalApplySettings();applyI18n();}
+function startCleaningMode(){
+  const due=state.chores.filter(c=>isDue(c)&&!isDone(c));
+  if(!due.length){toast('All scheduled chores are done. Nice work!');return}
+  currentCleaningIndex=0;window.cleanQueue=due;
+  document.getElementById('cleaningMode').classList.add('show');renderCleaningStep();
+}
+function renderCleaningStep(){
+  const c=window.cleanQueue[currentCleaningIndex];
+  if(!c){closeCleaningMode();toast('✓ Cleaning session complete!');return}
+  document.getElementById('cleanIcon').textContent=roomIcon(c.room);
+  document.getElementById('cleanTitle').textContent=langText(c);
+  document.getElementById('cleanMeta').textContent=`${roomName(c.room)} • ${c.duration} • ${currentCleaningIndex+1} of ${window.cleanQueue.length}`;
+  document.getElementById('cleanAction').textContent='✓ MARK AS DONE';
+}
+function completeCurrentCleaning(){
+  const c=window.cleanQueue[currentCleaningIndex];if(!c)return;
+  toggleDone(c.id);currentCleaningIndex++;renderCleaningStep();
+}
+function closeCleaningMode(){document.getElementById('cleaningMode').classList.remove('show')}
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+renderAll();populateRoomSelects();initSupabaseAuth();
+
+/* =========================
+   HOMELY V8 CORE UPGRADE
+   ========================= */
+state.settings=state.settings||{};
+state.settings.quietStart=state.settings.quietStart||'21:00';
+state.settings.quietEnd=state.settings.quietEnd||'07:00';
+state.settings.displayName=state.settings.displayName||'';
+state.shopping=Array.isArray(state.shopping)?state.shopping:[];
+state.maintenance=Array.isArray(state.maintenance)?state.maintenance:[];
+state.chores=(state.chores||[]).map(c=>({...c,reminderEnabled:c.reminderEnabled!==false,assignedTo:c.assignedTo||''}));
+let calendarCursor=new Date();
+let selectedCalendarKey=todayKey();
+let selectedRoomId='';
+let reminderTimer=null;
+
+function saveLocalOnly(){localStorage.setItem('homelyState',JSON.stringify(state));}
+function inQuietHours(time, start=state.settings.quietStart||'21:00', end=state.settings.quietEnd||'07:00'){
+  const t=(time||'00:00').slice(0,5), s=(start||'21:00').slice(0,5), e=(end||'07:00').slice(0,5);
+  if(s===e)return true;
+  return s>e ? (t>=s || t<e) : (t>=s && t<e);
+}
+function currentTimeHHMM(){const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+function formatDateKey(key){return dateFromKey(key).toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'});}
+function displayNameForUserId(id){
+  if(!id)return 'Me';
+  if(id===currentUser?.id)return getDisplayName();
+  const m=(window.homelyMembers||[]).find(x=>x.user_id===id);
+  return m?.display_name||m?.email||'Household member';
+}
+
+// Final chore form handling: recurrence + reminders + assignment.
+function populateAssignedTo(selected=''){
+  const el=document.getElementById('assignedTo'); if(!el)return;
+  const members=window.homelyMembers||[];
+  el.innerHTML='<option value="">Me</option>'+members.filter(m=>m.user_id!==currentUser?.id).map(m=>`<option value="${m.user_id}" ${m.user_id===selected?'selected':''}>${escapeHtml(m.display_name||m.email||'Household member')}</option>`).join('');
+  el.value=selected||'';
+}
+function openChoreModal(id=null){
+  document.getElementById('modalBackdrop').classList.add('show');
+  document.getElementById('editId').value=id||'';
+  document.getElementById('modalTitle').textContent=id?'Edit Chore':'Add Chore';
+  populateRoomSelects();
+  if(id){
+    const c=state.chores.find(x=>x.id===id); if(!c)return;
+    document.getElementById('choreName').value=c.name||'';
+    document.getElementById('choreRoom').value=c.room||'';
+    document.getElementById('duration').value=c.duration||'15 min';
+    const radio=document.querySelector(`input[name="repeat"][value="${c.repeat||'daily'}"]`); if(radio)radio.checked=true;
+    document.getElementById('reminder').value=c.reminder||'09:00';
+    const re=document.getElementById('reminderEnabled');if(re)re.checked=c.reminderEnabled!==false;
+    document.getElementById('priority').value=c.priority||'normal';
+    document.getElementById('notes').value=c.notes||'';
+    updateRepeatFields(c); setTimeout(()=>populateAssignedTo(c.assignedTo||''),0);
+  }else{
+    document.getElementById('choreForm').reset();
+    document.querySelector('input[name="repeat"][value="daily"]').checked=true;
+    updateRepeatFields(); setTimeout(()=>populateAssignedTo(''),0);
+    const re=document.getElementById('reminderEnabled');if(re)re.checked=true;
+  }
+}
+function saveChore(e){
+  e.preventDefault();
+  const id=document.getElementById('editId').value;
+  const repeat=document.querySelector('input[name="repeat"]:checked')?.value||'daily';
+  const old=id?state.chores.find(c=>c.id===id):null;
+  const obj={
+    name:document.getElementById('choreName').value.trim(),
+    fil:old?.fil||document.getElementById('choreName').value.trim(),
+    room:document.getElementById('choreRoom').value,
+    duration:document.getElementById('duration').value,
+    repeat,
+    reminder:document.getElementById('reminder').value||'',
+    reminderEnabled:document.getElementById('reminderEnabled')?.checked!==false,
+    priority:document.getElementById('priority').value,
+    notes:document.getElementById('notes').value.trim(),
+    assignedTo:document.getElementById('assignedTo')?.value||'',
+    active:old?.active!==false,
+    startDate:document.getElementById('startDate')?.value||todayKey()
+  };
+  if(repeat==='weekly')obj.days=[...document.querySelectorAll('.dayCheck:checked')].map(x=>+x.value);
+  if(repeat==='monthly')obj.monthDay=Math.min(31,Math.max(1,+document.getElementById('monthDay')?.value||1));
+  if(repeat==='custom')obj.intervalDays=Math.max(1,+document.getElementById('intervalDays')?.value||3);
+  if(id){Object.assign(old,obj)}else state.chores.push({...obj,id:crypto.randomUUID(),createdAt:Date.now(),completedDates:[]});
+  save();closeModal();renderAll();toast('✓ Chore saved');
+}
+function choreCard(c){
+  const done=isDone(c), p=c.priority||'normal';
+  const reminder=(c.reminderEnabled!==false&&c.reminder)?`⏰ ${escapeHtml(formatTime(c.reminder))}`:'';
+  const assigned=c.assignedTo?`👤 ${escapeHtml(displayNameForUserId(c.assignedTo))}`:'';
+  return `<div class="chore ${done?'done':''}">
+    <button class="check ${done?'done':''}" aria-label="Complete" onclick="toggleDone('${c.id}')">${done?'✓':''}</button>
+    <div class="chore-main"><div class="chore-title">${escapeHtml(langText(c))}</div>
+    <div class="meta"><span>${roomIcon(c.room)} ${escapeHtml(roomName(c.room))}</span><span>⏱ ${escapeHtml(c.duration)}</span><span>🔁 ${escapeHtml(repeatLabel(c))}</span>${reminder?`<span>${reminder}</span>`:''}${assigned?`<span>${assigned}</span>`:''}<span class="badge ${p==='high'?'priority-high':p==='low'?'priority-low':''}">${p}</span></div>
+    ${c.notes?`<div class="mini-note">${escapeHtml(c.notes)}</div>`:''}</div>
+    <div class="chore-actions"><button class="icon-btn" title="Edit" onclick="openChoreModal('${c.id}')">✎</button><button class="icon-btn" title="Delete" onclick="deleteChore('${c.id}')">🗑</button></div>
+  </div>`;
+}
+function formatTime(t){if(!t)return '';const [h,m]=t.split(':').map(Number);const ap=h>=12?'PM':'AM';const hh=(h%12)||12;return `${String(hh).padStart(2,'0')}:${String(m).padStart(2,'0')} ${ap}`;}
+
+// Completion: a chore is complete for one occurrence/day, not forever.
+function toggleDone(id){
+  const c=state.chores.find(x=>x.id===id);if(!c)return;
+  if(!isDue(c)){toast('This chore is not due today.');return;}
+  const key=todayKey(), dates=c.completedDates||[]; const idx=dates.indexOf(key);
+  if(idx>=0){dates.splice(idx,1);state.history=state.history.filter(h=>!(h.choreId===id&&h.date===key));}
+  else {dates.push(key);state.history.unshift({id:crypto.randomUUID(),choreId:id,date:key,action:'completed'});}
+  c.completedDates=dates;save();renderAll();
+  toast(idx>=0?'Marked incomplete':'✓ Chore completed');
+}
+
+// Calendar with month navigation and selected-day detail.
+function renderCalendar(){
+  const y=calendarCursor.getFullYear(),m=calendarCursor.getMonth(),first=new Date(y,m,1),last=new Date(y,m+1,0);
+  const names=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const label=new Date(y,m,1).toLocaleDateString(undefined,{month:'long',year:'numeric'});
+  const ml=document.getElementById('calendarMonthLabel');if(ml)ml.textContent=label;
+  let html=names.map(n=>`<div class="mini-note" style="padding:4px;font-weight:800">${n}</div>`).join('');
+  for(let i=0;i<first.getDay();i++)html+='<div></div>';
+  for(let d=1;d<=last.getDate();d++){
+    const date=new Date(y,m,d),key=todayKey(date),due=state.chores.filter(c=>isDue(c,date));
+    const cls=`day ${key===todayKey()?'today ':''}${key===selectedCalendarKey?'selected':''}`;
+    html+=`<div class="${cls}" onclick="selectCalendarDate('${key}')"><strong>${d}</strong><small>${due.length?due.length+' chore'+(due.length>1?'s':''):''}</small>${due.slice(0,3).map(c=>`<div class="due-dot">• ${escapeHtml(langText(c))}</div>`).join('')}</div>`;
+  }
+  const grid=document.getElementById('calendarGrid');if(grid)grid.innerHTML=html;renderCalendarSelected();
+}
+function selectCalendarDate(key){selectedCalendarKey=key;renderCalendar();}
+function changeCalendarMonth(delta){calendarCursor.setMonth(calendarCursor.getMonth()+delta);selectedCalendarKey=todayKey(new Date(calendarCursor.getFullYear(),calendarCursor.getMonth(),1));renderCalendar();}
+function goCalendarToday(){calendarCursor=new Date();selectedCalendarKey=todayKey();renderCalendar();}
+function renderCalendarSelected(){
+  const title=document.getElementById('calendarSelectedTitle'),list=document.getElementById('calendarSelectedList');if(!title||!list)return;
+  title.textContent=formatDateKey(selectedCalendarKey);
+  const due=state.chores.filter(c=>isDue(c,dateFromKey(selectedCalendarKey)));
+  list.innerHTML=due.length?due.map(c=>`<div class="reminder-item"><div><strong>${escapeHtml(langText(c))}</strong><div class="mini-note">${escapeHtml(roomName(c.room))} · ${escapeHtml(c.duration)}</div></div><span class="badge">${isDone(c,selectedCalendarKey)?'Completed':formatTime(c.reminder||'')}</span></div>`).join(''):'<div class="empty">No chores scheduled for this day.</div>';
+}
+
+function renderRooms(){
+  const grid=document.getElementById('roomsGrid');if(!grid)return;
+  grid.innerHTML=state.rooms.map(r=>{
+    const chores=state.chores.filter(c=>c.room===r.id), due=chores.filter(c=>isDue(c)),done=due.filter(c=>isDone(c)).length;
+    return `<div class="card room-card" onclick="selectRoom('${r.id}')"><div class="room-icon">${r.icon}</div><div style="flex:1"><strong>${escapeHtml(state.settings.language==='fil'?r.fil:r.name)}</strong><span>${chores.length} scheduled · ${done}/${due.length} today</span></div><span class="badge">${due.length?Math.round(done/due.length*100):0}%</span></div>`;
+  }).join('');
+  if(selectedRoomId)renderRoomDetail();
+}
+function selectRoom(id){selectedRoomId=id;navigate('rooms');renderRoomDetail();}
+function renderRoomDetail(){
+  const r=state.rooms.find(x=>x.id===selectedRoomId),title=document.getElementById('roomDetailTitle'),list=document.getElementById('roomDetailList');if(!title||!list)return;
+  if(!r){title.textContent='Select a room';list.innerHTML='';return;}
+  title.textContent=`${r.icon} ${state.settings.language==='fil'?r.fil:r.name}`;
+  const chores=state.chores.filter(c=>c.room===r.id);list.innerHTML=chores.length?chores.map(choreCard).join(''):'<div class="empty">No chores in this room yet.</div>';
+}
+
+function completedAll(){return state.history?.length||0;}
+function streak(){let s=0,d=new Date();while(true){const key=todayKey(d),has=state.chores.some(c=>(c.completedDates||[]).includes(key));if(!has)break;s++;d.setDate(d.getDate()-1);}return s;}
+function renderProgress(){
+  const all=completedAll();document.getElementById('allDone').textContent=all;document.getElementById('progressStreak').textContent=streak();document.getElementById('streakCount').textContent=streak();
+  const now=new Date(),start=new Date(now.getFullYear(),now.getMonth(),now.getDate()-6),week=state.history.filter(h=>dateFromKey(h.date)>=start).length;
+  document.getElementById('weekDone').textContent=week;
+  const list=document.getElementById('historyList');list.innerHTML=(state.history||[]).slice(0,30).map(h=>{const c=state.chores.find(x=>x.id===h.choreId);return `<div class="list-row"><span>✓ ${escapeHtml(c?langText(c):'Chore')}</span><span class="mini-note">${h.date}</span></div>`}).join('')||'<div class="empty">No completed chores yet.</div>';
+}
+
+// Simple home tools: cloud-backed when the optional tables exist, local fallback otherwise.
+function addShoppingItem(){const name=prompt('Supply / item:');if(!name)return;state.shopping.push({id:crypto.randomUUID(),name:name.trim(),done:false,createdAt:Date.now()});save();renderTools();toast('✓ Added to shopping list');}
+function toggleShopping(id){const x=state.shopping.find(i=>i.id===id);if(!x)return;x.done=!x.done;save();renderTools();}
+function addMaintenanceItem(){const name=prompt('Maintenance task:');if(!name)return;state.maintenance.push({id:crypto.randomUUID(),name:name.trim(),dueDate:'',done:false,createdAt:Date.now()});save();renderTools();toast('✓ Maintenance task added');}
+function toggleMaintenance(id){const x=state.maintenance.find(i=>i.id===id);if(!x)return;x.done=!x.done;save();renderTools();}
+function renderTools(){
+  const s=document.getElementById('shoppingList'),m=document.getElementById('maintenanceList');if(!s||!m)return;
+  s.innerHTML=state.shopping.length?state.shopping.map(x=>`<div class="tool-item ${x.done?'done':''}"><input type="checkbox" ${x.done?'checked':''} onchange="toggleShopping('${x.id}')"><span>${escapeHtml(x.name)}</span></div>`).join(''):'<div class="empty">No supplies yet.</div>';
+  m.innerHTML=state.maintenance.length?state.maintenance.map(x=>`<div class="tool-item ${x.done?'done':''}"><input type="checkbox" ${x.done?'checked':''} onchange="toggleMaintenance('${x.id}')"><span>${escapeHtml(x.name)}</span></div>`).join(''):'<div class="empty">No maintenance tasks yet.</div>';
+}
+function renderMembers(){const el=document.getElementById('membersList');if(!el)return;const ms=window.homelyMembers||[];el.innerHTML=ms.length?ms.map(m=>`<div class="member-pill"><div><strong>${escapeHtml(m.display_name||m.email||'Household member')}</strong><small>${escapeHtml(m.role||'member')}</small></div><span>●</span></div>`).join(''):'<div class="empty">No household members loaded.</div>';}
+
+function saveQuietHours(){state.settings.quietStart=document.getElementById('quietStart')?.value||'21:00';state.settings.quietEnd=document.getElementById('quietEnd')?.value||'07:00';save();toast('✓ Quiet hours updated');}
+async function requestNotifications(){
+  if(!('Notification' in window)){toast('Notifications are not supported in this browser.');return;}
+  const p=await Notification.requestPermission();
+  const s=document.getElementById('notificationStatus');if(s)s.textContent=p==='granted'?'Notifications are enabled.':'Notifications are not enabled.';
+  toast(p==='granted'?'✓ Notifications enabled':'Notifications not enabled');
+}
+async function showReminderNotification(c){
+  const title='Homely Reminder';const body=`${langText(c)} is due today.`;
+  try{
+    if('serviceWorker' in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,tag:`homely-${c.id}-${todayKey()}`,icon:'mjb-logo.png',badge:'mjb-logo.png',data:{url:'./'}});}
+    else if('Notification' in window&&Notification.permission==='granted')new Notification(title,{body});
+  }catch(e){if('Notification' in window&&Notification.permission==='granted')new Notification(title,{body});}
+}
+function reminderKey(c){return `homelyReminder:${todayKey()}:${c.id}`;}
+async function checkReminders(){
+  const now=new Date(),hhmm=currentTimeHHMM();if(inQuietHours(hhmm))return;
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  for(const c of state.chores.filter(x=>isDue(x,now)&&!isDone(x,todayKey())&&x.reminderEnabled!==false&&x.reminder)){
+    const target=(c.reminder||'').slice(0,5);if(target!==hhmm)continue;
+    const key=reminderKey(c);if(localStorage.getItem(key))continue;
+    localStorage.setItem(key,'1');await showReminderNotification(c);toast(`⏰ ${langText(c)} is due now`);
+  }
+}
+function startReminderEngine(){clearInterval(reminderTimer);checkReminders();reminderTimer=setInterval(checkReminders,30000);}
+
+// Cloud upgrade: keep existing tables compatible, plus optional tools/members data.
+async function pushCloudState(){
+  if(!currentHouseholdId||!currentUser)return false;
+  dedupeLocalChores();
+  const roomsPayload=state.rooms.map(r=>({id:legacyRoomIds[r.id]||r.id,household_id:currentHouseholdId,name:r.name,name_fil:r.fil||r.name,icon:r.icon||'🏠'}));
+  let res=await supabaseClient.from('rooms').upsert(roomsPayload,{onConflict:'id'});if(res.error){toast('Cloud sync failed for rooms: '+res.error.message);return false;}
+  const validRoomIds=new Set(roomsPayload.map(r=>r.id));
+  const choresPayload=state.chores.map(c=>({id:c.id,household_id:currentHouseholdId,room_id:validRoomIds.has(legacyRoomIds[c.room]||c.room)?(legacyRoomIds[c.room]||c.room):null,name:c.name,name_fil:c.fil||c.name,duration:c.duration,repeat_type:c.repeat,repeat_config:{days:c.days||[],monthDay:c.monthDay||1,intervalDays:c.intervalDays||3,startDate:c.startDate||todayKey()},reminder_time:c.reminder||null,reminder_enabled:c.reminderEnabled!==false,priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,created_by:currentUser.id,assigned_to:c.assignedTo||null}));
+  res=await supabaseClient.from('chores').upsert(choresPayload,{onConflict:'id'});
+  if(res.error){
+    // If the optional v8 columns are not migrated yet, retry using the v7 schema.
+    const fallback=choresPayload.map(c=>{const x={...c};delete x.reminder_enabled;delete x.assigned_to;return x;});
+    const r2=await supabaseClient.from('chores').upsert(fallback,{onConflict:'id'});if(r2.error){toast('Cloud sync failed for chores: '+r2.error.message);return false;}
+  }
+  const completionRows=[];state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>completionRows.push({chore_id:c.id,household_id:currentHouseholdId,user_id:currentUser.id,date_key:date,completed_at:date+'T12:00:00Z'})));
+  if(completionRows.length){res=await supabaseClient.from('chore_completions').upsert(completionRows,{onConflict:'chore_id,user_id,date_key'});if(res.error){toast('Cloud sync failed for completion history: '+res.error.message);return false;}}
+  try{await supabaseClient.from('shopping_items').upsert(state.shopping.map(x=>({id:x.id,household_id:currentHouseholdId,name:x.name,done:!!x.done,created_by:currentUser.id})),{onConflict:'id'});await supabaseClient.from('maintenance_tasks').upsert(state.maintenance.map(x=>({id:x.id,household_id:currentHouseholdId,name:x.name,due_date:x.dueDate||null,done:!!x.done,created_by:currentUser.id})),{onConflict:'id'});}catch(e){console.warn('Optional home tools sync unavailable',e)}
+  updateCloudUI(true);return true;
+}
+async function loadCloudState(){
+  if(!currentHouseholdId)return;
+  const queries=[supabaseClient.from('rooms').select('*').eq('household_id',currentHouseholdId).order('created_at'),supabaseClient.from('chores').select('*').eq('household_id',currentHouseholdId).order('created_at'),supabaseClient.from('chore_completions').select('*').eq('household_id',currentHouseholdId).order('completed_at',{ascending:false}),supabaseClient.from('household_members').select('user_id,role,created_at').eq('household_id',currentHouseholdId).order('created_at')];
+  const [rr,cc,xx,mm]=await Promise.all(queries);
+  if(rr.error||cc.error||xx.error){console.error(rr.error||cc.error||xx.error);toast('Could not load cloud data.');return;}
+  window.homelyMembers=mm.data||[];
+  if(!cc.data?.length&&state.chores?.length){await pushCloudState();return;}
+  const completionMap={};(xx.data||[]).forEach(x=>(completionMap[x.chore_id]??=[]).push(x.date_key));
+  state.rooms=(rr.data||[]).map(r=>({id:r.id,name:r.name,fil:r.name_fil||r.name,icon:r.icon||'🏠'}));
+  state.chores=(cc.data||[]).map(c=>({id:c.id,name:c.name,fil:c.name_fil||c.name,room:c.room_id,duration:c.duration||'15 min',repeat:c.repeat_type||'daily',days:c.repeat_config?.days||[],monthDay:c.repeat_config?.monthDay||1,intervalDays:c.repeat_config?.intervalDays||3,startDate:c.repeat_config?.startDate||todayKey(),reminder:c.reminder_time||'09:00',reminderEnabled:c.reminder_enabled!==false,assignedTo:c.assigned_to||'',priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,completedDates:completionMap[c.id]||[],createdAt:new Date(c.created_at).getTime()}));
+  state.history=[];state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>state.history.push({id:c.id+'-'+date,choreId:c.id,date,action:'completed'})));state.history.sort((a,b)=>b.date.localeCompare(a.date));
+  try{const [ss,mt]=await Promise.all([supabaseClient.from('shopping_items').select('*').eq('household_id',currentHouseholdId).order('created_at'),supabaseClient.from('maintenance_tasks').select('*').eq('household_id',currentHouseholdId).order('created_at')]);if(!ss.error)state.shopping=(ss.data||[]).map(x=>({id:x.id,name:x.name,done:x.done,createdAt:new Date(x.created_at).getTime()}));if(!mt.error)state.maintenance=(mt.data||[]).map(x=>({id:x.id,name:x.name,done:x.done,dueDate:x.due_date||'',createdAt:new Date(x.created_at).getTime()}));}catch(e){}
+  saveLocalOnly();renderAll();populateRoomSelects();toast('✓ Homely synced from cloud');
+}
+
+// Make the UI render all V8 areas.
+function renderAll(){
+  renderToday();renderChores();renderRooms();renderCalendar();renderProgress();renderTools();renderMembers();
+  const now=new Date(),h=now.getHours();document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';document.getElementById('greetingName').textContent=getDisplayName();
+  document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+  const dn=document.getElementById('displayName');if(dn)dn.value=getDisplayName();
+  const qs=document.getElementById('quietStart');if(qs)qs.value=state.settings.quietStart||'21:00';const qe=document.getElementById('quietEnd');if(qe)qe.value=state.settings.quietEnd||'07:00';
+  const ns=document.getElementById('notificationStatus');if(ns&&'Notification' in window)ns.textContent=Notification.permission==='granted'?'Notifications are enabled.':Notification.permission==='denied'?'Notifications are blocked in this browser.':'Allow Homely to show chore reminders.';
+  applySettings();
+}
+
+// Update cloud UI with household members and v8 status.
+const oldUpdateCloudUI=updateCloudUI;
+updateCloudUI=function(online){oldUpdateCloudUI(online);renderMembers();};
+
+// Service worker registration uses the v8 worker and starts reminders.
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').then(()=>startReminderEngine()).catch(()=>startReminderEngine()));}else{startReminderEngine();}
+startReminderEngine();
+renderAll();
+
