@@ -116,6 +116,7 @@ textarea{min-height:100px;resize:vertical}
 .toast{position:fixed;right:20px;bottom:20px;background:#173E3C;color:white;padding:14px 18px;border-radius:14px;box-shadow:var(--shadow);z-index:100;display:none}
 .toast.show{display:block;animation:toast .25s ease}
 @keyframes toast{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+button:disabled{opacity:.6;cursor:not-allowed;transform:none!important}
 .cleaning-mode{position:fixed;inset:0;background:var(--cream);z-index:60;display:none;padding:25px}
 .cleaning-mode.show{display:flex;align-items:center;justify-content:center}
 .cleaning-box{max-width:650px;width:100%;text-align:center}
@@ -526,12 +527,33 @@ function updateCloudUI(online){
   else status.textContent='Local only — sign in to sync across devices.';
 }
 async function signUpHomely(){
-  const email=document.getElementById('authEmail').value.trim(),password=document.getElementById('authPassword').value;
-  if(!email||password.length<6){toast('Enter an email and a password with at least 6 characters.');return;}
-  const {data,error}=await supabaseClient.auth.signUp({email,password});
-  if(error){toast(error.message);return;}
-  if(data.session){currentUser=data.user;await ensureCloudSetup();await loadCloudState();updateCloudUI(true);}
-  else toast('✓ Account created. Check your email to confirm, then sign in.');
+  const email=document.getElementById('authEmail').value.trim();
+  const password=document.getElementById('authPassword').value;
+  const buttons=document.querySelectorAll('#cloudLoggedOut .cloud-actions button');
+  if(!email||password.length<6){
+    toast('Enter an email and a password with at least 6 characters.');
+    return;
+  }
+  try{
+    buttons.forEach(b=>b.disabled=true);
+    const {data,error}=await supabaseClient.auth.signUp({email,password});
+    if(error)throw error;
+    if(data.session){
+      currentUser=data.user;
+      const ok=await ensureCloudSetup();
+      if(!ok)throw new Error('Account created, but Homely could not finish household setup.');
+      await loadCloudState();
+      updateCloudUI(true);
+      toast('✓ Account created and signed in');
+    }else{
+      toast('✓ Account created. Check your email to confirm, then sign in.');
+    }
+  }catch(error){
+    console.error('Homely sign-up error:',error);
+    toast('Create Account failed: '+(error?.message||'Please try again.'));
+  }finally{
+    buttons.forEach(b=>b.disabled=false);
+  }
 }
 async function signInHomely(){
   const email=document.getElementById('authEmail').value.trim();
@@ -873,25 +895,57 @@ function applyI18n(){
 }
 const originalApplySettings=applySettings;
 applySettings=function(){originalApplySettings();applyI18n();}
+let cleanQueue=[];
+
 function startCleaningMode(){
-  const due=state.chores.filter(c=>isDue(c)&&!isDone(c));
-  if(!due.length){toast('All scheduled chores are done. Nice work!');return}
-  currentCleaningIndex=0;window.cleanQueue=due;
-  document.getElementById('cleaningMode').classList.add('show');renderCleaningStep();
+  cleanQueue=state.chores.filter(c=>isDue(c)&&!isDone(c));
+  if(!cleanQueue.length){
+    toast('All scheduled chores are done. Nice work!');
+    return;
+  }
+  currentCleaningIndex=0;
+  const modal=document.getElementById('cleaningMode');
+  if(!modal){toast('Cleaning Mode could not open. Please refresh Homely.');return;}
+  modal.classList.add('show');
+  renderCleaningStep();
 }
+
 function renderCleaningStep(){
-  const c=window.cleanQueue[currentCleaningIndex];
-  if(!c){closeCleaningMode();toast('✓ Cleaning session complete!');return}
+  const c=cleanQueue[currentCleaningIndex];
+  const modal=document.getElementById('cleaningMode');
+  if(!c){
+    closeCleaningMode();
+    toast('✓ Cleaning session complete!');
+    return;
+  }
   document.getElementById('cleanIcon').textContent=roomIcon(c.room);
   document.getElementById('cleanTitle').textContent=langText(c);
-  document.getElementById('cleanMeta').textContent=`${roomName(c.room)} • ${c.duration} • ${currentCleaningIndex+1} of ${window.cleanQueue.length}`;
-  document.getElementById('cleanAction').textContent='✓ MARK AS DONE';
+  document.getElementById('cleanMeta').textContent=`${roomName(c.room)} • ${c.duration} • ${currentCleaningIndex+1} of ${cleanQueue.length}`;
+  const action=document.getElementById('cleanAction');
+  action.textContent='✓ MARK AS DONE';
+  action.disabled=false;
 }
+
 function completeCurrentCleaning(){
-  const c=window.cleanQueue[currentCleaningIndex];if(!c)return;
-  toggleDone(c.id);currentCleaningIndex++;renderCleaningStep();
+  const c=cleanQueue[currentCleaningIndex];
+  if(!c)return;
+  const action=document.getElementById('cleanAction');
+  if(action)action.disabled=true;
+
+  const wasDone=isDone(c);
+  if(!wasDone)toggleDone(c.id);
+  currentCleaningIndex++;
+  renderCleaningStep();
 }
-function closeCleaningMode(){document.getElementById('cleaningMode').classList.remove('show')}
+
+function closeCleaningMode(){
+  const modal=document.getElementById('cleaningMode');
+  if(modal)modal.classList.remove('show');
+  const action=document.getElementById('cleanAction');
+  if(action)action.disabled=false;
+  cleanQueue=[];
+  currentCleaningIndex=0;
+}
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 }
