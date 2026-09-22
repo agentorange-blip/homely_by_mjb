@@ -1,0 +1,13 @@
+{
+  "name": "Homely — Your home. Your routine. Your way.",
+  "short_name": "Homely",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#FAF7F0",
+  "theme_color": "#245C5A",
+  "description": "A household routine and home planner.",
+  "icons": [
+    {"src":"mjb-logo.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"mjb-logo.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
