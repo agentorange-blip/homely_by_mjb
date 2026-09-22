@@ -61,7 +61,7 @@ button{cursor:pointer}
 
 .sidebar-bottom{margin-top:auto;display:grid;gap:8px}
 main{min-width:0}
-.topbar{position:sticky;top:0;z-index:8;background:rgba(250,247,240,.93);backdrop-filter:blur(14px);padding:16px 32px;border-bottom:1px solid rgba(227,232,230,.75);display:flex;justify-content:space-between;align-items:center}
+.today-date{font-size:14px;color:var(--muted);font-weight:700;white-space:nowrap;min-width:180px}.topbar{position:sticky;top:0;z-index:8;background:rgba(250,247,240,.93);backdrop-filter:blur(14px);padding:16px 32px;border-bottom:1px solid rgba(227,232,230,.75);display:flex;justify-content:space-between;align-items:center}
 .mobile-menu{display:none}
 .lang-select{border:1px solid var(--line);background:white;border-radius:12px;padding:9px 12px}
 .content{max-width:1300px;margin:auto;padding:30px 32px 60px}
@@ -141,7 +141,7 @@ textarea{min-height:100px;resize:vertical}
 @media(max-width:720px){
   body{font-size:17px}
   .topbar{min-height:68px}
-  .topbar .mini-note{font-size:14px;max-width:52%;text-align:right}
+  .topbar .today-date{font-size:13px;min-width:145px;max-width:52%;text-align:left}
   .content{padding:20px 14px 50px}
   h2{font-size:31px}
   .card{padding:18px}
@@ -190,7 +190,7 @@ textarea{min-height:100px;resize:vertical}
   <main>
     <div class="topbar">
       <button class="mobile-menu" onclick="toggleSidebar()">☰</button>
-      <div class="mini-note" id="todayLabel"></div>
+      <div class="today-date" id="todayLabel" aria-label="Today"></div>
       <select class="lang-select" id="language" onchange="setLanguage(this.value)">
         <option value="en">English</option>
         <option value="fil">Filipino</option>
@@ -767,7 +767,7 @@ function renderAll(){
   const now=new Date(), h=now.getHours();
   document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';
   document.getElementById('greetingName').textContent=getDisplayName();
-  document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+  updateTodayLabel();
   const dn=document.getElementById('displayName'); if(dn) dn.value=getDisplayName();
   applySettings();
 }
@@ -1094,11 +1094,13 @@ async function loadCloudState(){
   saveLocalOnly();renderAll();populateRoomSelects();toast('✓ Homely synced from cloud');
 }
 
+function updateTodayLabel(){const el=document.getElementById('todayLabel');if(!el)return;const now=new Date();el.textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
+
 // Make the UI render all V8 areas.
 function renderAll(){
   renderToday();renderChores();renderRooms();renderCalendar();renderProgress();renderTools();renderMembers();
   const now=new Date(),h=now.getHours();document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';document.getElementById('greetingName').textContent=getDisplayName();
-  document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+  updateTodayLabel();
   const dn=document.getElementById('displayName');if(dn)dn.value=getDisplayName();
   const qs=document.getElementById('quietStart');if(qs)qs.value=state.settings.quietStart||'21:00';const qe=document.getElementById('quietEnd');if(qe)qe.value=state.settings.quietEnd||'07:00';
   const ns=document.getElementById('notificationStatus');if(ns&&'Notification' in window)ns.textContent=Notification.permission==='granted'?'Notifications are enabled.':Notification.permission==='denied'?'Notifications are blocked in this browser.':'Allow Homely to show chore reminders.';
@@ -1112,7 +1114,10 @@ updateCloudUI=function(online){oldUpdateCloudUI(online);renderMembers();};
 // Service worker registration uses the v8 worker and starts reminders.
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').then(()=>startReminderEngine()).catch(()=>startReminderEngine()));}else{startReminderEngine();}
 startReminderEngine();
+updateTodayLabel();
+setInterval(updateTodayLabel,60000);
 renderAll();
+updateTodayLabel();
 
 </script>
 </body>
