@@ -430,8 +430,25 @@ async function loadCloudState(){
   toast('✓ Homely synced from cloud');
 }
 
+function dedupeLocalChores(){
+  const seen=new Set();
+  const unique=[];
+  for(const c of state.chores||[]){
+    const key=[c.room||'',(c.name||'').trim().toLowerCase(),c.repeat||'daily',c.duration||'',c.reminder||'',c.priority||'normal',(c.notes||'').trim().toLowerCase()].join('|');
+    if(seen.has(key)) continue;
+    seen.add(key); unique.push(c);
+  }
+  if(unique.length !== (state.chores||[]).length){
+    state.chores=unique;
+    localStorage.setItem('homelyState',JSON.stringify(state));
+  }
+}
+
 async function pushCloudState(){
   if(!currentHouseholdId||!currentUser)return false;
+  // Repeated Sync Now calls are safe: existing rows are updated by UUID instead of inserted again.
+  // Also remove exact duplicate local test chores before pushing.
+  dedupeLocalChores();
   // Ensure all local room IDs are valid UUIDs before sending them to Supabase.
   const roomsPayload=state.rooms.map(r=>({id:legacyRoomIds[r.id]||r.id,household_id:currentHouseholdId,name:r.name,name_fil:r.fil||r.name,icon:r.icon||'🏠'}));
   const {error:roomError}=await supabaseClient.from('rooms').upsert(roomsPayload,{onConflict:'id'});
@@ -519,9 +536,16 @@ function toggleDone(id){
   else {c.completedDates.push(key);state.history.unshift({id:crypto.randomUUID(),choreId:id,date:key,action:'completed'});notify('✓ '+langText(c));}
   save();renderAll();
 }
-function deleteChore(id){
+async function deleteChore(id){
   if(!confirm('Delete this chore?'))return;
-  state.chores=state.chores.filter(c=>c.id!==id);save();renderAll();toast('Chore deleted');
+  state.chores=state.chores.filter(c=>c.id!==id);
+  state.history=state.history.filter(h=>h.choreId!==id);
+  save();renderAll();
+  if(currentUser&&currentHouseholdId){
+    const {error}=await supabaseClient.from('chores').delete().eq('id',id).eq('household_id',currentHouseholdId);
+    if(error){console.error('Homely cloud delete error:',error);toast('Deleted here, but cloud delete failed.');return;}
+  }
+  toast('Chore deleted');
 }
 function openChoreModal(id=null){
   document.getElementById('modalBackdrop').classList.add('show');
