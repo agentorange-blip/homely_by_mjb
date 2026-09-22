@@ -330,16 +330,27 @@ let currentUser = null;
 let currentHouseholdId = null;
 let cloudSyncTimer = null;
 
+const ROOM_IDS={
+  bedroom:'00000000-0000-4000-8000-000000000001',
+  kitchen:'00000000-0000-4000-8000-000000000002',
+  bathroom:'00000000-0000-4000-8000-000000000003',
+  living:'00000000-0000-4000-8000-000000000004',
+  dining:'00000000-0000-4000-8000-000000000005',
+  laundry:'00000000-0000-4000-8000-000000000006',
+  balcony:'00000000-0000-4000-8000-000000000007',
+  garage:'00000000-0000-4000-8000-000000000008',
+  garden:'00000000-0000-4000-8000-000000000009'
+};
 const defaultRooms=[
-  {id:'bedroom',name:'Bedroom',fil:'Kwarto',icon:'🛏️'},
-  {id:'kitchen',name:'Kitchen',fil:'Kusina',icon:'🍳'},
-  {id:'bathroom',name:'Bathroom',fil:'Banyo',icon:'🛁'},
-  {id:'living',name:'Living Room',fil:'Sala',icon:'🛋️'},
-  {id:'dining',name:'Dining Area',fil:'Dining Area',icon:'🍽️'},
-  {id:'laundry',name:'Laundry Area',fil:'Laundry Area',icon:'🧺'},
-  {id:'balcony',name:'Balcony',fil:'Balkonahe',icon:'🌤️'},
-  {id:'garage',name:'Garage',fil:'Garage',icon:'🚙'},
-  {id:'garden',name:'Garden',fil:'Bakuran',icon:'🌿'}
+  {id:ROOM_IDS.bedroom,name:'Bedroom',fil:'Kwarto',icon:'🛏️'},
+  {id:ROOM_IDS.kitchen,name:'Kitchen',fil:'Kusina',icon:'🍳'},
+  {id:ROOM_IDS.bathroom,name:'Bathroom',fil:'Banyo',icon:'🛁'},
+  {id:ROOM_IDS.living,name:'Living Room',fil:'Sala',icon:'🛋️'},
+  {id:ROOM_IDS.dining,name:'Dining Area',fil:'Dining Area',icon:'🍽️'},
+  {id:ROOM_IDS.laundry,name:'Laundry Area',fil:'Laundry Area',icon:'🧺'},
+  {id:ROOM_IDS.balcony,name:'Balcony',fil:'Balkonahe',icon:'🌤️'},
+  {id:ROOM_IDS.garage,name:'Garage',fil:'Garage',icon:'🚙'},
+  {id:ROOM_IDS.garden,name:'Garden',fil:'Bakuran',icon:'🌿'}
 ];
 const starterChores=[
   {name:'Make the bed',fil:'Ayusin ang kama',room:'bedroom',duration:'5 min',repeat:'daily',reminder:'07:00',priority:'normal',notes:''},
@@ -355,9 +366,16 @@ const starterChores=[
 let state=JSON.parse(localStorage.getItem('homelyState')||'null') || {
   rooms:defaultRooms, chores:[], history:[], settings:{language:'en',largeText:false,highContrast:false,simpleMode:false,reduceMotion:false}
 };
+// Migrate the original local-only room IDs (e.g. 'bedroom') to real UUIDs
+// because Supabase rooms.id is a UUID column.
+const legacyRoomIds={bedroom:ROOM_IDS.bedroom,kitchen:ROOM_IDS.kitchen,bathroom:ROOM_IDS.bathroom,living:ROOM_IDS.living,dining:ROOM_IDS.dining,laundry:ROOM_IDS.laundry,balcony:ROOM_IDS.balcony,garage:ROOM_IDS.garage,garden:ROOM_IDS.garden};
+if(!state.rooms?.length){ state.rooms=defaultRooms; }
+state.rooms=state.rooms.map(r=>({...r,id:legacyRoomIds[r.id]||r.id}));
 if(!state.chores.length){
-  state.chores=starterChores.map((x,i)=>({...x,id:crypto.randomUUID(),createdAt:Date.now()+i,active:true,completedDates:[]}));
+  state.chores=starterChores.map((x,i)=>({...x,room:legacyRoomIds[x.room]||x.room,id:crypto.randomUUID(),createdAt:Date.now()+i,active:true,completedDates:[]}));
   save();
+}else{
+  state.chores=state.chores.map(c=>({...c,room:legacyRoomIds[c.room]||c.room}));
 }
 let currentCleaningIndex=0;
 
@@ -368,7 +386,11 @@ async function ensureCloudSetup(){
   if(profileError){console.error(profileError);return false;}
   const {data:members,error:memberError}=await supabaseClient.from('household_members').select('household_id,role').eq('user_id',currentUser.id).limit(1);
   if(memberError){console.error(memberError);return false;}
-  if(members?.length){currentHouseholdId=members[0].household_id;return true;}
+  if(members?.length){
+    members.sort((a,b)=>new Date(a.created_at||0)-new Date(b.created_at||0));
+    currentHouseholdId=members[0].household_id;
+    return true;
+  }
   const {data:household,error:householdError}=await supabaseClient.from('households').insert({name:'My Homely Home',owner_id:currentUser.id}).select().single();
   if(householdError){console.error(householdError);toast('Could not create your household. Run the Supabase SQL setup first.');return false;}
   currentHouseholdId=household.id;
@@ -385,8 +407,15 @@ async function loadCloudState(){
     supabaseClient.from('chore_completions').select('*').eq('household_id',currentHouseholdId).order('completed_at',{ascending:false})
   ]);
   if(roomsError||choresError||completionError){console.error(roomsError||choresError||completionError);toast('Could not load cloud data.');return;}
+  // First/partial sync: if the cloud has no chores but this device has local chores,
+  // upload the local state instead of replacing it with an empty cloud state.
+  if(!chores?.length && state.chores?.length){
+    const pushed=await pushCloudState();
+    if(pushed){ toast('✓ Homely synced to cloud'); return; }
+  }
   if(!rooms?.length && !chores?.length){
-    await pushCloudState();
+    const pushed=await pushCloudState();
+    if(pushed) toast('✓ Homely synced to cloud');
     return;
   }
   const completionMap={};
@@ -402,17 +431,20 @@ async function loadCloudState(){
 }
 
 async function pushCloudState(){
-  if(!currentHouseholdId)return;
-  const roomsPayload=state.rooms.map(r=>({id:r.id,household_id:currentHouseholdId,name:r.name,name_fil:r.fil||r.name,icon:r.icon||'🏠'}));
+  if(!currentHouseholdId||!currentUser)return false;
+  // Ensure all local room IDs are valid UUIDs before sending them to Supabase.
+  const roomsPayload=state.rooms.map(r=>({id:legacyRoomIds[r.id]||r.id,household_id:currentHouseholdId,name:r.name,name_fil:r.fil||r.name,icon:r.icon||'🏠'}));
   const {error:roomError}=await supabaseClient.from('rooms').upsert(roomsPayload,{onConflict:'id'});
-  if(roomError){console.error(roomError);toast('Cloud sync failed for rooms.');return;}
-  const choresPayload=state.chores.map(c=>({id:c.id,household_id:currentHouseholdId,room_id:c.room,name:c.name,name_fil:c.fil||c.name,duration:c.duration,repeat_type:c.repeat,repeat_config:{days:c.days||[],monthDay:c.monthDay||1,intervalDays:c.intervalDays||3,startDate:c.startDate||todayKey()},reminder_time:c.reminder||null,priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,created_by:currentUser.id}));
+  if(roomError){console.error('Homely room sync error:',roomError);toast('Cloud sync failed for rooms: '+roomError.message);return false;}
+  const validRoomIds=new Set(roomsPayload.map(r=>r.id));
+  const choresPayload=state.chores.map(c=>({id:c.id,household_id:currentHouseholdId,room_id:validRoomIds.has(legacyRoomIds[c.room]||c.room)?(legacyRoomIds[c.room]||c.room):null,name:c.name,name_fil:c.fil||c.name,duration:c.duration,repeat_type:c.repeat,repeat_config:{days:c.days||[],monthDay:c.monthDay||1,intervalDays:c.intervalDays||3,startDate:c.startDate||todayKey()},reminder_time:c.reminder||null,priority:c.priority||'normal',notes:c.notes||'',active:c.active!==false,created_by:currentUser.id}));
   const {error:choreError}=await supabaseClient.from('chores').upsert(choresPayload,{onConflict:'id'});
-  if(choreError){console.error(choreError);toast('Cloud sync failed for chores.');return;}
+  if(choreError){console.error('Homely chore sync error:',choreError);toast('Cloud sync failed for chores: '+choreError.message);return false;}
   const completionRows=[];
   state.chores.forEach(c=>(c.completedDates||[]).forEach(date=>completionRows.push({chore_id:c.id,household_id:currentHouseholdId,user_id:currentUser.id,date_key:date,completed_at:date+'T12:00:00Z'})));
-  if(completionRows.length){const {error:e}=await supabaseClient.from('chore_completions').upsert(completionRows,{onConflict:'chore_id,user_id,date_key'});if(e)console.error(e);}
+  if(completionRows.length){const {error:e}=await supabaseClient.from('chore_completions').upsert(completionRows,{onConflict:'chore_id,user_id,date_key'});if(e){console.error('Homely completion sync error:',e);toast('Cloud sync failed for completion history: '+e.message);return false;}}
   updateCloudUI(true);
+  return true;
 }
 function queueCloudSync(){
   if(!currentUser||!currentHouseholdId)return;
@@ -444,7 +476,11 @@ async function signInHomely(){
   currentUser=data.user;const ok=await ensureCloudSetup();if(ok){await loadCloudState();updateCloudUI(true);}
 }
 async function signOutHomely(){await supabaseClient.auth.signOut();currentUser=null;currentHouseholdId=null;updateCloudUI(false);toast('Signed out. Your local data remains on this device.');}
-async function syncCloudNow(){if(!currentUser){toast('Sign in first.');return;}await loadCloudState();}
+async function syncCloudNow(){
+  if(!currentUser){toast('Sign in first.');return;}
+  const pushed=await pushCloudState();
+  if(pushed){await loadCloudState();toast('✓ Sync complete');}
+}
 
 function initSupabaseAuth(){
   supabaseClient.auth.getSession().then(async ({data})=>{
