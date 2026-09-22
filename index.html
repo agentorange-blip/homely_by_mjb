@@ -643,7 +643,7 @@ function renderToday(){
   const el=document.getElementById('todayList');
   if(!list.length){el.innerHTML='<div class="empty">No chores scheduled for today. Enjoy the day!</div>';return}
   el.innerHTML=list.map(choreCard).join('');
-  const done=list.filter(isDone).length, total=list.length, pct=total?Math.round(done/total*100):0;
+  const done=list.filter(c=>isDone(c)).length, total=list.length, pct=total?Math.round(done/total*100):0;
   document.getElementById('todayCount').textContent=total;
   document.getElementById('doneCount').textContent=done;
   document.getElementById('remainingCount').textContent=total-done;
