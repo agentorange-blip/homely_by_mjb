@@ -61,7 +61,7 @@ button{cursor:pointer}
 
 .sidebar-bottom{margin-top:auto;display:grid;gap:8px}
 main{min-width:0}
-.today-date{font-size:14px;color:var(--muted);font-weight:700;white-space:nowrap;min-width:180px}.topbar{position:sticky;top:0;z-index:8;background:rgba(250,247,240,.93);backdrop-filter:blur(14px);padding:16px 32px;border-bottom:1px solid rgba(227,232,230,.75);display:flex;justify-content:space-between;align-items:center}
+.today-date{display:block !important;visibility:visible !important;opacity:1 !important;font-size:14px;color:var(--muted);font-weight:700;white-space:nowrap;min-width:180px;padding-right:18px}.topbar{position:sticky;top:0;z-index:8;background:rgba(250,247,240,.93);backdrop-filter:blur(14px);padding:16px 32px;border-bottom:1px solid rgba(227,232,230,.75);display:flex;justify-content:space-between;align-items:center}
 .mobile-menu{display:none}
 .lang-select{border:1px solid var(--line);background:white;border-radius:12px;padding:9px 12px}
 .content{max-width:1300px;margin:auto;padding:30px 32px 60px}
@@ -190,7 +190,7 @@ textarea{min-height:100px;resize:vertical}
   <main>
     <div class="topbar">
       <button class="mobile-menu" onclick="toggleSidebar()">☰</button>
-      <div class="today-date" id="todayLabel" aria-label="Today"></div>
+      <div class="today-date" id="todayLabel" aria-label="Today">Tuesday, September 22</div>
       <select class="lang-select" id="language" onchange="setLanguage(this.value)">
         <option value="en">English</option>
         <option value="fil">Filipino</option>
@@ -1094,7 +1094,7 @@ async function loadCloudState(){
   saveLocalOnly();renderAll();populateRoomSelects();toast('✓ Homely synced from cloud');
 }
 
-function updateTodayLabel(){const el=document.getElementById('todayLabel');if(!el)return;const now=new Date();el.textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
+function updateTodayLabel(){const el=document.getElementById('todayLabel');if(!el)return;const now=new Date();el.textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});el.style.display='block';el.style.visibility='visible';el.style.opacity='1';}
 
 // Make the UI render all V8 areas.
 function renderAll(){
