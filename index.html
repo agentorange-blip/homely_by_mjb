@@ -415,8 +415,9 @@ let currentCleaningIndex=0;
 function save(){localStorage.setItem('homelyState',JSON.stringify(state)); queueCloudSync()}
 async function ensureCloudSetup(){
   if(!currentUser)return false;
+  try{
   const {data:existingProfile,error:profileError}=await supabaseClient.from('profiles').select('display_name').eq('user_id',currentUser.id).maybeSingle();
-  if(profileError){console.error(profileError);return false;}
+  if(profileError){console.error('Homely profile setup error:',profileError);toast('Cloud profile error: '+profileError.message);return false;}
   if(existingProfile){
     currentDisplayName=existingProfile.display_name || (currentUser.email||'').split('@')[0];
   }else{
@@ -439,6 +440,11 @@ async function ensureCloudSetup(){
   const {error:hmError}=await supabaseClient.from('household_members').insert({household_id:currentHouseholdId,user_id:currentUser.id,role:'owner'});
   if(hmError){console.error(hmError);return false;}
   return true;
+  }catch(error){
+    console.error('Homely cloud setup error:',error);
+    toast('Cloud setup failed: '+(error?.message||'Please try again.'));
+    return false;
+  }
 }
 
 async function loadCloudState(){
@@ -528,11 +534,32 @@ async function signUpHomely(){
   else toast('✓ Account created. Check your email to confirm, then sign in.');
 }
 async function signInHomely(){
-  const email=document.getElementById('authEmail').value.trim(),password=document.getElementById('authPassword').value;
+  const email=document.getElementById('authEmail').value.trim();
+  const password=document.getElementById('authPassword').value;
+  const button=document.querySelector('#cloudLoggedOut .btn-primary');
   if(!email||!password){toast('Enter your email and password.');return;}
-  const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
-  if(error){toast(error.message);return;}
-  currentUser=data.user;const ok=await ensureCloudSetup();if(ok){await loadCloudState();updateCloudUI(true);}
+  if(!supabaseClient?.auth){toast('Supabase is not available. Please refresh the page.');return;}
+  try{
+    if(button){button.disabled=true;button.textContent='Signing In…';}
+    const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
+    if(error) throw error;
+    if(!data?.user) throw new Error('Sign-in completed but no user session was returned.');
+    currentUser=data.user;
+    updateCloudUI(false);
+    const ok=await ensureCloudSetup();
+    if(!ok) throw new Error('Signed in, but Homely could not finish setting up your household. Check the Supabase policies/setup.');
+    await loadCloudState();
+    updateCloudUI(true);
+    toast('✓ Signed in successfully');
+  }catch(error){
+    console.error('Homely sign-in error:',error);
+    toast('Sign in failed: '+(error?.message||'Please try again.'));
+    currentUser=null;
+    currentHouseholdId=null;
+    updateCloudUI(false);
+  }finally{
+    if(button){button.disabled=false;button.textContent='Sign In';}
+  }
 }
 async function signOutHomely(){await supabaseClient.auth.signOut();currentUser=null;currentHouseholdId=null;currentDisplayName='';updateCloudUI(false);toast('Signed out. Your local data remains on this device.');}
 async function syncCloudNow(){
@@ -548,7 +575,15 @@ function initSupabaseAuth(){
     updateCloudUI(!!currentUser);
   }).catch(console.error);
   supabaseClient.auth.onAuthStateChange((_event,session)=>{
-    setTimeout(async()=>{currentUser=session?.user||null;if(currentUser){const ok=await ensureCloudSetup();if(ok)await loadCloudState();}updateCloudUI(!!currentUser);},0);
+    currentUser=session?.user||null;
+    updateCloudUI(!!currentUser);
+    if(currentUser && !currentHouseholdId){
+      setTimeout(async()=>{
+        const ok=await ensureCloudSetup();
+        if(ok) await loadCloudState();
+        updateCloudUI(true);
+      },0);
+    }
   });
 }
 
