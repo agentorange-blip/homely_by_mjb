@@ -85,6 +85,7 @@ h3{margin:0 0 8px;font-size:21px}
 .stat .label{color:var(--muted);font-weight:700}
 .progress{height:12px;background:#EAF0EE;border-radius:999px;overflow:hidden;margin-top:14px}
 .progress>span{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--sage));border-radius:999px;transition:width .35s ease}
+.home-greeting{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.greeting-name{color:var(--teal)}.today-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.reset-today{white-space:nowrap}
 .section-head{display:flex;justify-content:space-between;align-items:center;margin:28px 0 13px}
 .chore-list{display:grid;gap:12px}
 .chore{background:white;border:1px solid var(--line);border-radius:17px;padding:16px 18px;display:flex;align-items:center;gap:14px;box-shadow:0 6px 20px rgba(0,0,0,.035)}
@@ -191,7 +192,7 @@ textarea{min-height:100px;resize:vertical}
       <section class="view active" id="view-home">
         <div class="hero">
           <div>
-            <h2 id="greeting">Good morning!</h2>
+            <h2 class="home-greeting"><span id="greetingText">Good morning</span>, <span id="greetingName" class="greeting-name">there</span>!</h2>
             <p class="sub" data-i18n="homeSub">Here is what needs your attention today.</p>
           </div>
           <button class="btn btn-primary" onclick="openChoreModal()">＋ <span data-i18n="addChore">Add Chore</span></button>
@@ -205,7 +206,7 @@ textarea{min-height:100px;resize:vertical}
         </div>
 
         <div class="card" style="margin-top:18px">
-          <div class="stat"><div><h3 data-i18n="dailyProgress">Today's progress</h3><div class="sub" id="progressText">0%</div></div><strong id="progressPct">0%</strong></div>
+          <div class="stat"><div><h3 data-i18n="dailyProgress">Today's progress</h3><div class="sub" id="progressText">0%</div></div><div class="today-actions"><strong id="progressPct">0%</strong><button class="btn btn-secondary reset-today" onclick="resetTodayCompletions()">↺ Reset Today</button></div></div>
           <div class="progress"><span id="progressBar" style="width:0%"></span></div>
         </div>
 
@@ -258,6 +259,7 @@ textarea{min-height:100px;resize:vertical}
           <div class="settings-row"><div><strong>Reduced Motion</strong><div class="mini-note">Minimize animations and transitions.</div></div><label class="switch"><input type="checkbox" id="reduceMotion" onchange="toggleSetting('reduceMotion',this.checked)"><span class="slider"></span></label></div>
           <div class="settings-row"><div><strong>Browser Notifications</strong><div class="mini-note">Allow reminder notifications when this browser supports them.</div></div><button class="btn btn-secondary" onclick="requestNotifications()">Enable</button></div>
           <div class="settings-row"><div><strong>Quiet Hours</strong><div class="mini-note">9:00 PM – 7:00 AM</div></div><span class="badge">Recommended</span></div>
+          <div class="settings-row"><div><strong>Your Name</strong><div class="mini-note">This is the name Homely uses in your greeting.</div></div><input id="displayName" style="max-width:260px" placeholder="Your name" maxlength="60" onchange="saveDisplayName(this.value)"></div>
           <div class="settings-row"><div><strong>Language</strong><div class="mini-note">English, Filipino, or both.</div></div><select style="width:auto" onchange="setLanguage(this.value)"><option value="en">English</option><option value="fil">Filipino</option><option value="both">English + Filipino</option></select></div>
         </div>
         <div class="card cloud-box">
@@ -273,8 +275,7 @@ textarea{min-height:100px;resize:vertical}
           <div id="cloudLoggedIn" style="display:none">
             <div class="mini-note">Signed in as <span class="user-email" id="cloudEmail"></span></div>
             <div class="cloud-actions"><button class="btn btn-secondary" onclick="syncCloudNow()">Sync Now</button><button class="btn btn-danger" onclick="signOutHomely()">Sign Out</button></div>
-            <div style="margin-top:10px"><button class="btn btn-secondary" onclick="resetTodayCompletions()">Reset today's completion status</button></div>
-            <div class="cloud-note">Use this once if old local test data made today's chores appear completed. It keeps the chores and removes only today's completion marks.</div>
+            <div class="cloud-note">Your chores and completion history sync through Supabase. Reset today's progress is available on the Home dashboard.</div>
           </div>
         </div>
         <div class="card" style="margin-top:18px"><h3>About Homely</h3><p class="sub">A household routine and home planner designed to make everyday home life easier.</p><div class="logo-wrap" id="logoArea"></div><p style="text-align:center;font-weight:800">Developed by MJB</p></div>
@@ -330,6 +331,7 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_psB0s9pe-GA8QU7O1dCYKA_YY6jDy16
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 let currentUser = null;
 let currentHouseholdId = null;
+let currentDisplayName = "";
 let cloudSyncTimer = null;
 
 const ROOM_IDS={
@@ -366,11 +368,12 @@ const starterChores=[
 ];
 
 let state=JSON.parse(localStorage.getItem('homelyState')||'null') || {
-  rooms:defaultRooms, chores:[], history:[], settings:{language:'en',largeText:false,highContrast:false,simpleMode:false,reduceMotion:false}
+  rooms:defaultRooms, chores:[], history:[], settings:{language:'en',displayName:'',largeText:false,highContrast:false,simpleMode:false,reduceMotion:false}
 };
 // Migrate the original local-only room IDs (e.g. 'bedroom') to real UUIDs
 // because Supabase rooms.id is a UUID column.
 const legacyRoomIds={bedroom:ROOM_IDS.bedroom,kitchen:ROOM_IDS.kitchen,bathroom:ROOM_IDS.bathroom,living:ROOM_IDS.living,dining:ROOM_IDS.dining,laundry:ROOM_IDS.laundry,balcony:ROOM_IDS.balcony,garage:ROOM_IDS.garage,garden:ROOM_IDS.garden};
+state.settings=state.settings||{}; if(!('displayName' in state.settings)) state.settings.displayName='';
 if(!state.rooms?.length){ state.rooms=defaultRooms; }
 state.rooms=state.rooms.map(r=>({...r,id:legacyRoomIds[r.id]||r.id}));
 if(!state.chores.length){
@@ -384,8 +387,17 @@ let currentCleaningIndex=0;
 function save(){localStorage.setItem('homelyState',JSON.stringify(state)); queueCloudSync()}
 async function ensureCloudSetup(){
   if(!currentUser)return false;
-  const {data:profile,error:profileError}=await supabaseClient.from('profiles').upsert({user_id:currentUser.id,display_name:(currentUser.email||'').split('@')[0]},{onConflict:'user_id'}).select().single();
+  const {data:existingProfile,error:profileError}=await supabaseClient.from('profiles').select('display_name').eq('user_id',currentUser.id).maybeSingle();
   if(profileError){console.error(profileError);return false;}
+  if(existingProfile){
+    currentDisplayName=existingProfile.display_name || (currentUser.email||'').split('@')[0];
+  }else{
+    currentDisplayName=(currentUser.email||'').split('@')[0];
+    const {error:e}=await supabaseClient.from('profiles').insert({user_id:currentUser.id,display_name:currentDisplayName});
+    if(e){console.error(e);return false;}
+  }
+  state.settings.displayName=currentDisplayName;
+  localStorage.setItem('homelyState',JSON.stringify(state));
   const {data:members,error:memberError}=await supabaseClient.from('household_members').select('household_id,role').eq('user_id',currentUser.id).limit(1);
   if(memberError){console.error(memberError);return false;}
   if(members?.length){
@@ -494,7 +506,7 @@ async function signInHomely(){
   if(error){toast(error.message);return;}
   currentUser=data.user;const ok=await ensureCloudSetup();if(ok){await loadCloudState();updateCloudUI(true);}
 }
-async function signOutHomely(){await supabaseClient.auth.signOut();currentUser=null;currentHouseholdId=null;updateCloudUI(false);toast('Signed out. Your local data remains on this device.');}
+async function signOutHomely(){await supabaseClient.auth.signOut();currentUser=null;currentHouseholdId=null;currentDisplayName='';updateCloudUI(false);toast('Signed out. Your local data remains on this device.');}
 async function syncCloudNow(){
   if(!currentUser){toast('Sign in first.');return;}
   const pushed=await pushCloudState();
@@ -698,8 +710,10 @@ function renderProgress(){
 function renderAll(){
   renderToday();renderChores();renderRooms();renderCalendar();renderProgress();
   const now=new Date(), h=now.getHours();
-  document.getElementById('greeting').textContent=h<12?'Good morning!':h<18?'Good afternoon!':'Good evening!';
+  document.getElementById('greetingText').textContent=h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+  document.getElementById('greetingName').textContent=getDisplayName();
   document.getElementById('todayLabel').textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+  const dn=document.getElementById('displayName'); if(dn) dn.value=getDisplayName();
   applySettings();
 }
 function navigate(view){
@@ -727,6 +741,21 @@ function setLanguage(l){state.settings.language=l;save();if ('serviceWorker' in 
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 }
 renderAll();populateRoomSelects();updateRepeatFields()}
+async function saveDisplayName(value){
+  const name=(value||'').trim().slice(0,60);
+  currentDisplayName=name || ((currentUser?.email||'').split('@')[0]) || 'there';
+  state.settings.displayName=currentDisplayName;
+  localStorage.setItem('homelyState',JSON.stringify(state));
+  if(currentUser){
+    const {error}=await supabaseClient.from('profiles').upsert({user_id:currentUser.id,display_name:currentDisplayName},{onConflict:'user_id'});
+    if(error){console.error(error);toast('Name saved here, but cloud update failed.');return;}
+  }
+  renderAll();
+  toast('✓ Name updated');
+}
+function getDisplayName(){
+  return (currentDisplayName || state.settings.displayName || (currentUser?.email||'').split('@')[0] || 'there').trim() || 'there';
+}
 function toggleSetting(key,val){state.settings[key]=val;save();applySettings()}
 function applySettings(){
   const b=document.body;
